@@ -26,7 +26,7 @@ crates/
 
   ── 以下两个是 V4 新起的,和上面的 V3 链条并存、互不影响 ──
   bw-v4/        V4 内核:四张表的本机库(project/issue/claude_conversation/app_meta)+
-                仓文件解析(PROJECT.md、.bw/*.toml、docs/plan/周文件、docs/releases.md)+
+                仓文件解析(.bw/PROJECT.md、.bw/*.toml、.bw/plan/周文件、.bw/releases.md)+
                 现算推导(健康灯、指标读数、周列表)+ 命令/事件总线 + 标准件铺设
                 + 三张运作活(周计划 / 资产盘点 / 规范铺底)与内嵌终端的 PTY 生命周期。
                 复用 bw-core 与 bw-engine,不依赖 bw-store / bw-app。
@@ -71,7 +71,7 @@ cargo test --workspace --exclude app-desktop --exclude app-shell   # CI 也跑;�
 
 **环境变量**:`BW_DB`(数据库路径;默认 macOS `~/Library/Application Support/BuildersWorkbench/workbench.db`)· `BW_OPEN=<项目名>` + `BW_PANEL=progress|workflow|routine|artifact|version|issues`(启动深链到指定项目/面板,stderr 打 `[BW_OPEN]` 即渲染证明)· `BW_HUB=skill|agent|workflow|cron|connector|knowledge|activity|notify|settings` / `BW_SEL=skill|agent|workflow|cron|connector:<uuid>`(深链到 Hub / 组件详情)· `BW_WORKSPACES`(工作区根)· `BW_CLAUDE_BIN`(覆盖 `claude` 二进制路径)· `BW_FLOW=<command-file>`(进程内点击/断言脚本,验收流用)。
 
-**V4 新壳的环境变量**(自成一套,别和上面那套混用):`BW_DB`(默认 `~/Library/Application Support/BuildersWorkbench/workbench-v4.db`)· `BW_OPEN=<项目 slug 或名字>` + `BW_PANEL=overview|plan|session|notify|config|kb` · `BW_VIEW=onboard|settings`(直接开落地页/设置页)· `BW_WORKSPACES` · `BW_PTY_DEBUG=1`(内嵌终端把初始化结果与键盘字节打进 stderr)· `BW_KB_DUMP=1`(把知识库三个页签的数字打进 stderr:每组几个文件、代码图头一名是谁多大、资产五个区块各几条,好拿 `ls` / `codegraph files -j` / `cat docs/releases.md` 当场对)。启动时 stderr 打两行:`[BW_OPEN] …`(深链解析结果)与 `[BW_BOOT] projects=N db=…`(界面已渲染的证明);项目群走假群时每发一条打一行 `[BW_CHAT_SENT] …`。
+**V4 新壳的环境变量**(自成一套,别和上面那套混用):`BW_DB`(默认 `~/Library/Application Support/BuildersWorkbench/workbench-v4.db`)· `BW_OPEN=<项目 slug 或名字>` + `BW_PANEL=overview|plan|session|notify|config|kb` · `BW_VIEW=onboard|settings`(直接开落地页/设置页)· `BW_WORKSPACES` · `BW_PTY_DEBUG=1`(内嵌终端把初始化结果与键盘字节打进 stderr)· `BW_KB_DUMP=1`(把知识库三个页签的数字打进 stderr:每组几个文件、代码图头一名是谁多大、资产五个区块各几条,好拿 `ls` / `codegraph files -j` / `cat .bw/releases.md` 当场对)。启动时 stderr 打两行:`[BW_OPEN] …`(深链解析结果)与 `[BW_BOOT] projects=N db=…`(界面已渲染的证明);项目群走假群时每发一条打一行 `[BW_CHAT_SENT] …`。
 
 ## headless 例子(不开界面直接驱动内核;每个都有现役用途)
 

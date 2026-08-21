@@ -1,5 +1,9 @@
 # 13 · 桌面壳 vs 高保真:逐屏缺口表(施工已完成,本篇转为完成记录)
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这是什么——把 `docs/v4-prototype/hifi/index.html`(对过的高保真)
 > 和 `crates/app-shell/`(桌面壳)逐屏对了一遍,原本是待施工清单,**九个屏已全部
 > 重排完毕**,现在是完成记录 + 还差什么。给谁看——接着做 V4 的会话,以及要核对

@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>buddy V4 · 产品指南</title>
+<style>
+  :root{
+    /* 配色取自 crates/app-shell/assets/hifi.css 的 :root（V4 高保真原型正本），非自造 */
+    --bg:#EFEBE2; --surface:#FBFAF6; --surface-2:#F4F0E7; --rail:#E9E3D7;
+    --fg:#23211C; --muted:#57534A; --muted-2:#8C867A; --muted-3:#A19B8D;
+    --border:#E2DCCF; --border-deep:#DBD4C5;
+    --accent:#C5654A; --accent-ink:#A8432B; --accent-soft:#EFD9CE;
+    --sig-green:#6B8E5A; --sig-amber:#D3A24A; --sig-red:#C0463A; --sig-gray:#9A9590;
+    --shadow:0 8px 26px rgba(35,33,28,.08);
+    --font-display:'Noto Serif SC','Songti SC','STSong','SimSun',serif;
+    --font-body:'Noto Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    --font-mono:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;display:flex;overflow:hidden}
+  ::selection{background:var(--accent-soft)}
+  ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-thumb{background:var(--border-deep);border-radius:6px}
+
+  aside.sidebar{width:272px;flex:0 0 272px;height:100vh;background:var(--rail);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:22px 0 16px;overflow-y:auto}
+  .brand{padding:0 22px 20px;border-bottom:1px solid var(--border)}
+  .brand .mark{font-family:var(--font-display);font-weight:700;font-size:22px;letter-spacing:-0.01em}
+  .brand .mark .dot{color:var(--accent)}
+  .brand .sub{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted-2);margin-top:6px}
+  nav{padding:14px 0;flex:1}
+  .nav-group{margin-bottom:6px}
+  .nav-group-title{font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted-2);padding:8px 22px 6px;font-weight:500}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:8px 22px;cursor:pointer;font-size:14px;border-left:3px solid transparent;transition:background .12s,border-color .12s}
+  .nav-item:hover{background:rgba(197,101,74,.08)}
+  .nav-item.active{background:var(--accent-soft);border-left-color:var(--accent);color:var(--accent-ink);font-weight:500}
+  .nav-item svg{width:16px;height:16px;flex:0 0 16px;stroke:currentColor;stroke-width:1.6;fill:none}
+  .nav-foot{padding:12px 22px;border-top:1px solid var(--border);font-size:11px;color:var(--muted-2);line-height:1.5}
+  .nav-foot code{font-family:var(--font-mono);color:var(--accent-ink)}
+
+  main.main{flex:1;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header.topbar{height:56px;flex:0 0 56px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;padding:0 32px;background:var(--bg)}
+  .crumb{display:flex;align-items:center;gap:10px;font-size:13px}
+  .crumb .sec{color:var(--muted-2)} .crumb .sep{color:var(--border-deep)} .crumb .cur{color:var(--fg);font-weight:500}
+  .badge{margin-left:auto;font-size:11px;letter-spacing:0.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted-2);background:var(--surface);text-transform:uppercase}
+  .badge.use{color:#5f7d57;border-color:#c4d2bc} .badge.maint{color:var(--accent-ink);border-color:var(--accent-soft)}
+  .content{flex:1;overflow-y:auto;padding:34px 40px 90px}
+
+  .screen{display:none;max-width:900px}
+  .screen.active{display:block;animation:fade .18s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .eyebrow{font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent-ink);font-weight:500;margin-bottom:10px}
+  h1.disp{font-family:var(--font-display);font-weight:700;font-size:32px;line-height:1.2;letter-spacing:-0.02em;margin-bottom:14px}
+  .lede{font-size:16px;color:var(--muted);line-height:1.65;max-width:66ch;margin-bottom:22px}
+  h2.sec{font-family:var(--font-display);font-weight:600;font-size:20px;letter-spacing:-0.01em;margin:30px 0 12px;display:flex;align-items:center;gap:9px}
+  h2.sec .n{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--accent-ink);background:var(--accent-soft);padding:2px 7px;border-radius:5px}
+  h3.sub{font-size:15px;font-weight:600;margin:18px 0 8px}
+  p{margin-bottom:12px;max-width:68ch} .muted{color:var(--muted-2)}
+  strong{font-weight:600} code,.mono{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:.05em .35em;border-radius:4px}
+  a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid var(--accent-soft)} a:hover{border-bottom-color:var(--accent-ink)}
+
+  .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:8px 0 6px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;box-shadow:var(--shadow)}
+  .card .t{font-weight:600;margin-bottom:5px;display:flex;align-items:center;gap:8px}
+  .card .d{font-size:13.5px;color:var(--muted);line-height:1.55}
+
+  .callout{display:flex;gap:12px;border-radius:10px;padding:14px 16px;margin:16px 0;border:1px solid var(--border)}
+  .callout svg{width:18px;height:18px;flex:0 0 18px;stroke-width:1.6;fill:none;margin-top:2px}
+  .callout.warn{background:#FBF1E2;border-color:#EAD0A6} .callout.warn svg{stroke:var(--sig-amber)}
+  .callout.note{background:var(--surface)} .callout.note svg{stroke:var(--accent)}
+  .callout.danger{background:#F6E3DE;border-color:#E3B7AD} .callout.danger svg{stroke:var(--sig-red)}
+  .callout .body{font-size:14px} .callout .body strong{display:block;margin-bottom:2px}
+
+  pre.code{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:12.5px;line-height:1.6;color:#3a332b;margin:12px 0}
+  pre.code .c{color:var(--muted-2)}
+
+  .ops{margin:6px 0}
+  .ops .li{display:grid;grid-template-columns:28px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border)}
+  .ops .li:last-child{border-bottom:none}
+  .ops .li .n{font-family:var(--font-mono);font-size:12px;color:#fff;background:var(--accent);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+  .ops .li .t{font-size:14px;padding-top:1px}
+
+  .res{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:12px 0}
+  .res .h{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted-2);margin-bottom:8px}
+  .res ul{list-style:none}
+  .res li{padding:5px 0;font-size:13.5px;display:grid;grid-template-columns:14px 1fr;gap:8px}
+  .res li .b{width:6px;height:6px;border-radius:50%;background:var(--accent);margin-top:8px}
+
+  .linker{font-size:13px;color:var(--muted-2);margin:14px 0 0}
+  .linker a{font-family:var(--font-mono);font-size:12.5px}
+
+  .checklist{display:flex;flex-direction:column;gap:0;margin:8px 0}
+  .chk{display:grid;grid-template-columns:22px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--border)}
+  .chk:last-child{border-bottom:none}
+  .chk .mk{width:20px;height:20px;border-radius:5px;border:1.5px solid var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent);margin-top:1px}
+  .chk .mk svg{width:13px;height:13px;stroke:var(--accent);stroke-width:2;fill:none}
+  .chk .t{font-size:14px;font-weight:600;margin-bottom:3px}
+  .chk .d{font-size:13px;color:var(--muted);line-height:1.55}
+
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}
+  .rule{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:13px 16px;background:var(--surface)}
+  .rule .n{font-family:var(--font-mono);font-size:11px;color:var(--accent-ink);margin-bottom:4px}
+  .rule .t{font-weight:600;margin-bottom:3px} .rule .d{font-size:13px;color:var(--muted);line-height:1.55}
+
+  .foot{margin-top:36px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-2);max-width:76ch}
+  .foot code{color:var(--accent-ink)}
+
+  .diagram{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:18px 16px;margin:14px 0 10px}
+  .diagram .cap{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted-2);margin-bottom:12px}
+  .diagram .scroll{overflow-x:auto}
+  .diagram svg{display:block;min-width:460px}
+  .diagram .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted-2)}
+  .diagram .legend .sw{display:inline-flex;align-items:center;gap:6px;margin-right:4px}
+  .diagram .legend .box{width:14px;height:10px;border-radius:2px;display:inline-block}
+
+  .pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:4px 0}
+  .pipe .box{flex:1 1 110px;min-width:100px;border:1px solid var(--border);border-radius:8px;padding:10px 11px;background:var(--bg);text-align:center}
+  .pipe .box .t{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--accent-ink);margin-bottom:4px}
+  .pipe .box .d{font-size:12px;color:var(--muted-2);line-height:1.45}
+  .pipe .box.lock{border-color:var(--accent);background:var(--accent-soft)}
+  .pipe .box.warn{border-color:#E3B7AD;background:#F6E3DE}
+  .pipe .arr{display:flex;align-items:center;padding:0 6px;color:var(--accent-ink);font-family:var(--font-mono);font-size:14px}
+
+  .split2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}
+  @media(max-width:900px){.split2{grid-template-columns:1fr}}
+  .pane{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--bg)}
+  .pane .ph{font-family:var(--font-mono);font-size:12px;color:var(--accent-ink);margin-bottom:8px;font-weight:600}
+  .pane ul{margin:0;padding-left:1.1em;font-size:13px;color:var(--fg)}
+  .pane li{margin:4px 0}
+
+  .ktable-wrap{overflow-x:auto;margin:10px 0 6px}
+  .ktable{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);min-width:480px}
+  .ktable th,.ktable td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top;line-height:1.45}
+  .ktable th{background:var(--surface-2);font-weight:600;font-size:12px;color:var(--muted-2);letter-spacing:0.02em}
+  .ktable .k{font-family:var(--font-mono);font-size:12px;white-space:nowrap}
+
+  .ex{border:1px dashed var(--border-deep);border-radius:10px;padding:12px 14px;margin:12px 0;background:rgba(244,239,227,.55)}
+  .ex .eh{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:6px}
+  .ex .ed{font-size:13.5px;line-height:1.55}
+  .where{font-size:13px;color:var(--fg);margin:8px 0 4px;line-height:1.55}
+  .bullets{margin:8px 0 4px;padding-left:1.15em;font-size:13.5px}
+  .bullets li{margin:5px 0}
+  .note-line{font-size:13px;color:var(--muted-2);margin:6px 0 12px;line-height:1.55}
+
+  .stages{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 14px}
+  .stages .sl{font-size:11px;color:var(--muted-2);align-self:center;margin-right:2px}
+  .stages .s{font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:5px;background:var(--accent-soft);color:var(--accent-ink);letter-spacing:0.02em}
+
+  .banner{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;background:var(--surface);padding:14px 18px;margin-bottom:22px;font-size:13.5px;line-height:1.7;color:var(--muted)}
+  .banner strong{color:var(--fg)}
+  .banner .rules-mini{margin-top:8px;padding-left:1.2em}
+  .banner .rules-mini li{margin:3px 0}
+
+  .roadmap{display:flex;flex-direction:column;gap:0;margin:10px 0}
+  .rstop{display:grid;grid-template-columns:70px 1fr;gap:14px;padding:14px 0;border-bottom:1px dashed var(--border)}
+  .rstop:last-child{border-bottom:none}
+  .rstop .tag{align-self:start;font-family:var(--font-mono);font-size:11px;padding:3px 8px;border-radius:5px;text-align:center;white-space:nowrap}
+  .rstop.done .tag{background:var(--accent);color:#fff}
+  .rstop.todo .tag{background:var(--surface-2);color:var(--muted-2);border:1px dashed var(--border-deep)}
+  .rstop .body .t{font-weight:600;margin-bottom:3px}
+  .rstop .body .d{font-size:13.5px;color:var(--muted);line-height:1.55}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand"><div class="mark">buddy<span class="dot">.</span></div><div class="sub">V4 · 产品指南</div></div>
+  <nav>
+    <div class="nav-group">
+      <div class="nav-group-title">怎么用</div>
+      <div class="nav-item active" data-screen="u0"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>每周怎么转</div>
+      <div class="nav-item" data-screen="u1"><svg viewBox="0 0 24 24"><path d="M5 6h11l4 4v8H5z"/></svg>第 0 站 · 接入项目</div>
+      <div class="nav-item" data-screen="u2"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 16l3-5 3 3 4-6"/></svg>还没走到的站</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-group-title">特性开发维护</div>
+      <div class="nav-item" data-screen="m1"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg>代码分成哪几块</div>
+      <div class="nav-item" data-screen="m2"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9l3 3-3 3M13 15h4"/></svg>常用命令 · 门禁</div>
+      <div class="nav-item" data-screen="m3"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 5v4M12 15v4M5 12h4M15 12h4"/></svg>深链 · headless 例子</div>
+      <div class="nav-item" data-screen="m4"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>怎么验证</div>
+      <div class="nav-item" data-screen="m5"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.3-3.3a4 4 0 0 1-5.4 5.4L6.5 20.5a2 2 0 0 1-2.8-2.8L12.8 8.6a4 4 0 0 1 5.4-5.4z"/></svg>改代码 · 文档去哪</div>
+    </div>
+  </nav>
+  <div class="nav-foot">
+    上半部分只写<strong>已经真走过一遍</strong>的站；<br>下半部分只写<strong>今天真能跑</strong>的命令。<br>正本：<code>v4-产品指南.html</code>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="crumb"><span class="sec" id="crumb-sec">怎么用</span><span class="sep">/</span><span class="cur" id="crumb-cur">每周怎么转</span></div>
+    <span class="badge use" id="top-badge">Usage</span>
+  </header>
+
+  <div class="content" id="content">
+
+    <!-- ============ U0 每周怎么转 ============ -->
+    <section class="screen active" id="u0" data-title="每周怎么转" data-sec-name="怎么用">
+      <div class="eyebrow">buddy V4 · 产品指南</div>
+      <h1 class="disp">30 秒导读</h1>
+      <div class="banner">
+        这是什么——buddy V4 的一份指南，分两部分：<strong>上半部分「怎么用」</strong>，一站一站写，从零开始把一个项目接进来、每周转一圈；<strong>下半部分「怎么给 buddy 开发新特性」</strong>，写给要动 buddy 自己这个仓的人。给谁看——第一次打开 buddy 的人（先是我们自己，然后是组里的同事），以及接手 buddy 开发的人。现在还作数吗——作数（2026-08-21）。
+        <ul class="rules-mini">
+          <li>上半部分只写<strong>已经真走过一遍</strong>的站。没走到的站列在下面，写明「还没走到」，不提前编。</li>
+          <li>下半部分只写<strong>今天真能跑</strong>的命令。命令改了这里就得改。</li>
+        </ul>
+        想知道「为什么这么设计」，看设计正本 <code>docs/v4-prototype/design.md</code>；想知道「还有什么没做」，只认 <code>docs/LEFTOVERS.md</code>。
+      </div>
+
+      <h2 class="sec"><span class="n">怎么干活</span></h2>
+      <p>一个项目接进来一次,之后<strong>每周转一圈,一圈六站</strong>(下面那张图就是这一圈)。<strong>你做的事只有两类</strong>：说清楚要什么，以及在关键路口点头。剩下的——查资料、写代码、写文档、提交、开 MR——交给 agent。</p>
+      <p>所以整份指南只有一条主线：<strong>接进来 → 每周定目标 → 派活 → agent 干 → 你验收</strong>。</p>
+
+      <h2 class="sec"><span class="n">六站旅程环</span>一个项目每周怎么转</h2>
+      <div class="diagram">
+        <div class="cap">0 只做一次，已经真走过；1–6 是设计，还没真走完一圈</div>
+        <div class="scroll">
+          <svg viewBox="0 0 480 450" width="480" height="450" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="六站旅程环：0 接入项目一次性完成后，1 看总览、2/3 定本周、4 干活、5 验收记发版、6 定时盘点循环往复，6 之后回到 1">
+            <defs>
+              <marker id="pgArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+              <marker id="pgArrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--accent-ink)"/>
+              </marker>
+            </defs>
+            <!-- 环边（1→2/3→4→5→6，细箭头） -->
+            <line x1="310" y1="119" x2="333" y2="135" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#pgArrow)"/>
+            <line x1="370" y1="249" x2="361" y2="276" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#pgArrow)"/>
+            <line x1="264" y1="346" x2="236" y2="346" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#pgArrow)"/>
+            <line x1="139" y1="276" x2="130" y2="249" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#pgArrow)"/>
+            <!-- 闭环边（6→1，重点标出） -->
+            <line x1="167" y1="135" x2="190" y2="119" stroke="var(--accent-ink)" stroke-width="2.4" marker-end="url(#pgArrowAccent)"/>
+            <text x="250" y="132" text-anchor="middle" font-size="11.5" fill="var(--accent-ink)" font-weight="700">↺ 下周一回到总览</text>
+            <!-- 入口边（0→1） -->
+            <line x1="150" y1="66" x2="178" y2="69" stroke="var(--accent-ink)" stroke-width="2" marker-end="url(#pgArrowAccent)"/>
+
+            <!-- node 0：接入项目，已走过，实心 -->
+            <rect x="8" y="28" width="140" height="64" rx="12" fill="var(--accent)" stroke="var(--accent-ink)" stroke-width="1.4"/>
+            <text x="78" y="55" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">0 · 接入项目</text>
+            <text x="78" y="72" text-anchor="middle" font-size="11" fill="#fff" opacity=".92">一次性 · 已经走过</text>
+
+            <!-- node 1 看总览 -->
+            <rect x="180" y="43" width="140" height="64" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="250" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">1 · 看总览</text>
+            <text x="250" y="87" text-anchor="middle" font-size="11" fill="var(--muted-2)">健康灯多半先灰</text>
+
+            <!-- node 2/3 定本周 -->
+            <rect x="323" y="147" width="140" height="64" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="393" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">2/3 · 定本周</text>
+            <text x="393" y="191" text-anchor="middle" font-size="11" fill="var(--muted-2)">一次会话定目标</text>
+
+            <!-- node 4 干活 -->
+            <rect x="268" y="314" width="140" height="64" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="338" y="341" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">4 · 干活</text>
+            <text x="338" y="358" text-anchor="middle" font-size="11" fill="var(--muted-2)">在活自己的目录里</text>
+
+            <!-- node 5 验收/记发版 -->
+            <rect x="92" y="314" width="140" height="64" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="162" y="341" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">5 · 验收记发版</text>
+            <text x="162" y="358" text-anchor="middle" font-size="11" fill="var(--muted-2)">合入后人点完成</text>
+
+            <!-- node 6 定时盘点 -->
+            <rect x="37" y="147" width="140" height="64" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <text x="107" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">6 · 定时盘点</text>
+            <text x="107" y="191" text-anchor="middle" font-size="11" fill="var(--muted-2)">自动建活，停评审中</text>
+          </svg>
+        </div>
+        <div class="legend">
+          <span class="sw"><span class="box" style="background:var(--accent)"></span>实心 = 已经真走过一遍</span>
+          <span class="sw"><span class="box" style="background:var(--surface);border:1.5px dashed var(--border-deep)"></span>虚线 = 设计定了，还没真走完这一站</span>
+        </div>
+      </div>
+      <p class="note-line">这份指南跟着实践走：每走完一站、那一站的改动合入之前，把这一站从「还没走到」搬进「已经走过」。今天只有第 0 站是实心的。</p>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>两条你随时可以拿去核对的规矩</strong>「完成」永远由人点：agent 干完最远只到「评审中」；定时任务只会自动<strong>建</strong>活，绝不自动<strong>完成</strong>活。没数据就是灰，不是绿：健康灯只能从真实数据推出来，界面上任何一个数字都能用 <code>sqlite3</code> 直接查库核对。</div>
+      </div>
+      <div class="foot">设计正本 <code>docs/v4-prototype/design.md</code>;还没做的活只认 <code>docs/LEFTOVERS.md</code>。</div>
+    </section>
+
+    <!-- ============ U1 第 0 站 · 接入项目 ============ -->
+    <section class="screen" id="u1" data-title="第 0 站 · 接入项目" data-sec-name="怎么用">
+      <div class="eyebrow">怎么用 · 第 0 站</div>
+      <h1 class="disp">把一个项目接进来</h1>
+      <p class="lede">这一站已经走过，下面写的都是实际发生的。</p>
+
+      <h2 class="sec"><span class="n">你要准备什么</span></h2>
+      <div class="checklist">
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">一个 git 仓</div><div class="d">GitHub 或 codehub 上的都行，你有它的读权限。</div></div></div>
+        <div class="chk"><div class="mk"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></div><div><div class="t">本机装好命令行工具并登录过</div><div class="d"><code>gh</code>（GitHub）或 <code>codehub-cli</code>（内部）。项目墙上那条环境条会当场去 PATH 里找这些命令，找得到绿、找不到红。<strong>红的不影响别的事，只影响对应那条路能不能走。</strong></div></div></div>
+      </div>
+
+      <h3 class="sub">工作区目录先看一眼</h3>
+      <p>「设置」里有一格「工作区根目录」。以后接进来的项目，仓就 clone 到这个目录下面，一个项目一个子目录。默认值在 macOS 上是 <code>~/.builders-workbench/workspaces</code>，Windows 上是用户目录下的同名路径；要放到别的盘，现在就在这格里改掉、点保存——<strong>改完立刻生效，重启还在，而且已经接进来的项目不会跟着搬家</strong>（它们的路径当场被钉死在原处）。</p>
+
+      <h2 class="sec"><span class="n">接：两步</span></h2>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">点「+ 接入项目」。<strong>第一步只问一件事：这个项目在哪。</strong>光标点进「项目地址」那格，buddy 就去问平台要你账号下的仓，列成下拉框；打字即在这批里检索，点一行即选中。不想理列表就直接把 <code>owner/repo</code> 打进去，一样算数。框里右边那个 ⟳ 是重新拉一次。</div></div>
+        <div class="li"><div class="n">2</div><div class="t"><strong>第二步是基础信息</strong>，四格：项目名称、你想做什么、最像的对标、三个月长成什么样。</div></div>
+      </div>
+      <div class="callout warn">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>列不出来的时候</strong>会把命令的原话摆给你看（多半是没装或没登录），<strong>不会摆一张假列表</strong>。</div>
+      </div>
+
+      <h3 class="sub">第二步顶上：这个仓被 buddy 接管过没有</h3>
+      <p>判据是去它远端读 <code>.bw/project.toml</code>：</p>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>你会看到</th><th>意思</th><th>你该做什么</th></tr></thead>
+          <tbody>
+            <tr><td>已经被 buddy 接管过</td><td>同事先接过，或者你以前接过</td><td>四格是回显出来的，直接改就行；接进来时不会覆盖仓里已有的字</td></tr>
+            <tr><td>还没被 buddy 接管过</td><td>仓在、就是没这份文件</td><td>四格自己填</td></tr>
+            <tr><td>找不到这个仓</td><td>地址敲错了、私有仓没权限、没登录</td><td><strong>先把地址改对</strong>，接一个不存在的仓后面每步都会失败</td></tr>
+            <tr><td>没查成</td><td>网不通、默认分支不叫 main</td><td>照样能接；仓里真有名片的话，接入时以仓里的为准</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note-line">最后两行是特意分开的：<strong>「没查成」不等于「没被接管过」</strong>。混成一句的话，你会照着空格子填一遍，接进去反而把仓里真正的名片盖掉。</p>
+
+      <h2 class="sec"><span class="n">点「完成接入」之后</span>会发生什么</h2>
+      <p>界面上一步一句地摆出来，做完的那行原地换成结果——<strong>这一下要十几秒，别猛点</strong>：</p>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t"><strong>取仓</strong>——目录里已经是 git 仓就直接用（顺带把它的 origin 报出来给你核对）；目录不在或是空的就 clone；没填远端就建个空目录并说明它是空的；<strong>目录里有东西又不是 git 仓就当场弹回</strong>，既不敢往里 clone，也不敢把别人的目录当成这个项目的仓。</div></div>
+        <div class="li"><div class="n">2</div><div class="t"><strong>库里落一行项目</strong>——只存定位：名字、本机路径、远端地址。名片不进库。</div></div>
+        <div class="li"><div class="n">3</div><div class="t"><strong>写名片</strong>——<code>.bw/project.toml</code>。仓里已经有就一个字不覆盖、只补空着的字段。</div></div>
+        <div class="li"><div class="n">4</div><div class="t"><strong>自动建一张「规范铺底」的活</strong>——它开一条分支、往仓里写规范骨架、<strong>提一个 MR</strong>，然后<strong>停在评审中等你合</strong>。它不会自动合，也不会自动把活标成完成。</div></div>
+        <div class="li"><div class="n">5</div><div class="t"><strong>自动进这个项目</strong>。</div></div>
+      </div>
+
+      <p>第 4 步这次只铺你马上要用的三份，不是一口气铺二十几份，而且全在 <code>.bw/</code> 底下：</p>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>文件</th><th>是什么</th></tr></thead>
+          <tbody>
+            <tr><td class="k">.bw/PROJECT.md</td><td>项目名片：这个项目是什么、对标谁、北极星是什么</td></tr>
+            <tr><td class="k">.bw/standard.toml</td><td>铺的是哪一版规范、开了哪几类件</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note-line">（另外还有第 3 步写的 <code>.bw/project.toml</code> 和一份记指纹的 <code>.bw/managed.toml</code>，一共五份，全在 <code>.bw/</code> 里。）其余的——指标正本、活的分类映射、周计划目录、发版记录、设计文档目录——<strong>等你第一次真的走到那一站再出现</strong>。想提前补齐，「配置」屏那颗「规范铺底」按钮点一次就全铺上。</p>
+
+      <h2 class="sec"><span class="n">两件事你会注意到</span></h2>
+      <div class="res">
+        <ul>
+          <li><span class="b"></span><div><strong>buddy 铺进你仓里的东西，全都在 <code>.bw/</code> 里，一个例外都没有。</strong>仓根一个字不动——<code>README.md</code>、<code>AGENTS.md</code>、<code>CLAUDE.md</code>、<code>docs/</code>，接项目这一步全都不碰。「哪些是 bw 的资产」<code>ls .bw/</code> 一眼可数。</div></li>
+          <li><span class="b"></span><div><strong>buddy 自己的规矩不往你仓里写。</strong>完成由人点、指标只能真采、合并永远是人——这些每次开工都会现给 agent，写进你仓里只会变成第二份会过时的副本。</div></li>
+          <li><span class="b"></span><div><strong>想让 buddy 给你的项目写一份开发手册</strong>（仓根 <code>AGENTS.md</code>：怎么建、怎么跑、怎么测、目录里什么在哪）——那是另一件事，不在接项目这一步。它归「资产盘点」：buddy 起一次会话真读一遍你的仓，把读出来的摊给你看，<strong>问你要不要</strong>，你点头才写，写完还是一个 MR 给你评审。给你的项目加规范是在改你的项目，得先问过你。（这一步还没实现，见 <code>docs/LEFTOVERS.md</code>。）</div></li>
+          <li><span class="b"></span><div><strong>buddy 自带的技能不会进你的仓。</strong>它们住在 buddy 自己的目录里，agent 开工时 buddy 只把这张活要用的那一份的名字和路径告诉它，正文让它自己去读。你仓里 <code>.claude/skills/</code> 下的技能仍然是你自己的，buddy 不碰。</div></li>
+        </ul>
+      </div>
+      <p class="note-line">你仓里本来就有的 <code>README.md</code>、<code>CLAUDE.md</code>、<code>AGENTS.md</code>，<strong>buddy 根本不碰</strong>——不是「已存在就跳过」，是这一步压根不往仓根写东西。</p>
+      <p class="note-line">第 4 步没成不会推翻前面：项目已经接进来了、仓已经在本机了，这两件是真的。回头在「配置」屏点一次「规范铺底」重来就行——它按标题幂等，重来不会多建一张活。</p>
+
+      <h2 class="sec"><span class="n">接错了怎么办</span></h2>
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>项目卡右上角有个 ✕。</strong>点一下先问一句，再点「移走」才真移走。它只把这个项目从工作台移出去（项目行、它所有活的账），<strong>仓一个字节都不动</strong>——硬盘上的代码还在原地，活自己的工作目录也还在。回执里会告诉你仓在哪儿，你真要删自己去删。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">这一站结束时</span>你手上有什么</h2>
+      <div class="res">
+        <ul>
+          <li><span class="b"></span><div>本机一个真实的仓（clone 下来的）</div></li>
+          <li><span class="b"></span><div>工作台上一个项目</div></li>
+          <li><span class="b"></span><div>一张停在「评审中」的「规范铺底」活，和它在远端的 MR</div></li>
+        </ul>
+      </div>
+      <p><strong>下一步是去合那个 MR。</strong>合完这个仓就有管理体系的正本了。</p>
+    </section>
+
+    <!-- ============ U2 还没走到的站 ============ -->
+    <section class="screen" id="u2" data-title="还没走到的站" data-sec-name="怎么用">
+      <div class="eyebrow">怎么用 · 站点地图</div>
+      <h1 class="disp">还没走到的站</h1>
+      <p class="lede">下面这些<strong>还没实际走过一遍</strong>，所以这里只留标题，不写步骤——走到哪一站，那一站的改动合入之前把它补上来。想提前知道它们<strong>打算</strong>怎么做，去看设计正本 <code>docs/v4-prototype/design.md</code>，但那是设计不是实况。</p>
+
+      <div class="roadmap">
+        <div class="rstop todo"><div class="tag">第 1 站</div><div class="body"><div class="t">周一看总览</div><div class="d">这项目是什么、健康吗。第一次多半是灰的（没数据 = 灰，不是绿）。</div></div></div>
+        <div class="rstop todo"><div class="tag">第 2/3 站</div><div class="body"><div class="t">开始本周</div><div class="d">一次 agent 会话里做完「复盘上周 → 更新指标 → 定本周目标和活清单」。</div></div></div>
+        <div class="rstop todo"><div class="tag">第 4 站</div><div class="body"><div class="t">干活</div><div class="d">每张活按类别选开工工具，agent 在这张活自己的工作目录里干，你在内嵌终端里全程看得见、随时能停。</div></div></div>
+        <div class="rstop todo"><div class="tag">第 5 站</div><div class="body"><div class="t">验收闭环</div><div class="d">提交并开 MR → 评审 → 合入 → <strong>你点完成</strong> → 记发版。</div></div></div>
+        <div class="rstop todo"><div class="tag">第 6 站</div><div class="body"><div class="t">定时</div><div class="d">资产盘点自动建活并自动开工，停在评审中；下周一回到总览。</div></div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">健康灯怎么亮</span>只从真实数据推,不能被人调</h2>
+      <p>「周一看总览」这一站还没走过，具体判断依据没有实践细节可写。以下是这份指南能如实说的部分——来自「两条你随时可以拿去核对的规矩」和对外宣讲稿里对同一屏的描述，先立住机制形状，细节等真走过再补。</p>
+      <div class="diagram">
+        <div class="cap">数据推导，不能手点；没数据就停在灰</div>
+        <div class="scroll">
+          <svg viewBox="0 0 700 210" width="700" height="210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="真实数据观测经过综合判定后点亮四态健康灯：绿色平稳、黄色需要关注、红色阻塞、灰色没数据；灰色特别标注为没数据不是绿色">
+            <defs>
+              <marker id="hArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+            </defs>
+            <rect x="10" y="70" width="150" height="64" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="85" y="97" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">真实数据观测</text>
+            <text x="85" y="114" text-anchor="middle" font-size="11" fill="var(--muted-2)">多条 · 只追加</text>
+
+            <line x1="164" y1="102" x2="196" y2="102" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#hArrow)"/>
+
+            <rect x="200" y="70" width="150" height="64" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/>
+            <text x="275" y="97" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--accent-ink)">buddy 综合判定</text>
+            <text x="275" y="114" text-anchor="middle" font-size="11" fill="var(--accent-ink)">不能手点</text>
+
+            <line x1="354" y1="102" x2="386" y2="102" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#hArrow)"/>
+
+            <circle cx="430" cy="102" r="22" fill="var(--sig-green)" opacity=".45"/>
+            <text x="430" y="145" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">绿</text>
+            <text x="430" y="160" text-anchor="middle" font-size="11" fill="var(--muted-2)">平稳</text>
+
+            <circle cx="500" cy="102" r="22" fill="var(--sig-amber)"/>
+            <text x="500" y="145" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">黄</text>
+            <text x="500" y="160" text-anchor="middle" font-size="11" fill="var(--muted-2)">需要关注</text>
+
+            <circle cx="570" cy="102" r="22" fill="var(--sig-red)"/>
+            <text x="570" y="145" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">红</text>
+            <text x="570" y="160" text-anchor="middle" font-size="11" fill="var(--muted-2)">阻塞</text>
+
+            <circle cx="640" cy="102" r="22" fill="var(--sig-gray)"/>
+            <text x="640" y="145" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">灰</text>
+            <text x="640" y="160" text-anchor="middle" font-size="11" fill="var(--muted-2)">没数据</text>
+
+            <path d="M640 80 L640 40" stroke="var(--accent-ink)" stroke-width="1.6" stroke-dasharray="3 3"/>
+            <text x="640" y="30" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--accent-ink)">没数据 = 灰，不是绿</text>
+
+            <text x="360" y="188" text-anchor="middle" font-size="12" fill="var(--muted-2)">灯旁边同时列出这次判断的理由（通常三条）——不是一个孤零零的圆点让你猜</text>
+          </svg>
+        </div>
+      </div>
+      <p class="note-line"><strong>灯下面那三条理由,界面上原样显示的就是这三句</strong>(成立打勾、不成立打圈):</p>
+      <ul class="checklist">
+        <li>本周定了周目标,仓里也有真实提交 —— 不成立时会具体说是哪一半没满足:「本周还没有周计划文件或周目标是空的」,或者「本周有周目标,但仓里还没有真实提交」。</li>
+        <li>本周或上周的周计划文件里有指标读数 —— 不成立时显示「最近两周都没有记过指标读数」。</li>
+        <li>上周有合入或发版 —— 不成立时显示「上周既没有合入也没有发版」。</li>
+      </ul>
+      <p class="note-line">三条怎么合成一盏灯(什么时候黄、什么时候红、为什么没数据是灰不是绿),见设计正本 <code>docs/v4-prototype/design.md</code> 第 5 章。</p>
+
+      <h2 class="sec"><span class="n">一件活怎么走到完成</span>唯一入边是评审中</h2>
+      <div class="diagram">
+        <div class="cap">agent 只能推到评审中；完成只有一个入口，且必须是人点的</div>
+        <div class="scroll">
+          <svg viewBox="0 0 760 260" width="760" height="260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="活从建活到进行中到评审中到完成的主链，完成只能从评审中经人工点击进入；定时任务只能自动建活，绝不能自动把活推到完成">
+            <defs>
+              <marker id="sArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+              <marker id="sArrowLock" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--accent-ink)"/>
+              </marker>
+            </defs>
+
+            <rect x="16" y="26" width="128" height="58" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.5"/>
+            <text x="80" y="51" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">建活</text>
+            <text x="80" y="67" text-anchor="middle" font-size="11" fill="var(--muted-2)">定本周活清单</text>
+
+            <line x1="148" y1="55" x2="184" y2="55" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#sArrow)"/>
+
+            <rect x="188" y="26" width="148" height="58" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.5"/>
+            <text x="262" y="51" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">干活 · 进行中</text>
+            <text x="262" y="67" text-anchor="middle" font-size="11" fill="var(--muted-2)">agent 在活的目录里</text>
+
+            <line x1="340" y1="55" x2="376" y2="55" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#sArrow)"/>
+
+            <rect x="380" y="26" width="138" height="58" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.5"/>
+            <text x="449" y="51" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">评审中</text>
+            <text x="449" y="67" text-anchor="middle" font-size="11" fill="var(--muted-2)">agent 提交并开 MR</text>
+
+            <line x1="522" y1="55" x2="556" y2="55" stroke="var(--accent-ink)" stroke-width="2.4" marker-end="url(#sArrowLock)"/>
+            <text x="504" y="40" text-anchor="middle" font-size="11" font-weight="700" fill="var(--accent-ink)">唯一入边</text>
+
+            <rect x="560" y="20" width="130" height="70" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2"/>
+            <text x="625" y="48" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--accent-ink)">完成</text>
+            <text x="625" y="64" text-anchor="middle" font-size="11" fill="var(--accent-ink)">人显式点</text>
+            <text x="625" y="80" text-anchor="middle" font-size="11" fill="var(--accent-ink)">🔒</text>
+
+            <rect x="188" y="164" width="170" height="58" rx="10" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.5"/>
+            <text x="273" y="189" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">定时任务 · 第 6 站</text>
+            <text x="273" y="205" text-anchor="middle" font-size="11" fill="var(--muted-2)">资产盘点，到点自动开工</text>
+
+            <path d="M200 164 C 130 140, 100 110, 82 88" fill="none" stroke="var(--muted-2)" stroke-width="1.8" marker-end="url(#sArrow)"/>
+            <text x="105" y="145" font-size="11" fill="var(--muted-2)">自动建活</text>
+
+            <path d="M358 178 C 480 210, 560 190, 610 96" fill="none" stroke="var(--sig-red)" stroke-width="1.8" stroke-dasharray="4 4"/>
+            <circle cx="612" cy="92" r="7" fill="none" stroke="var(--sig-red)" stroke-width="2"/>
+            <line x1="608" y1="88" x2="616" y2="96" stroke="var(--sig-red)" stroke-width="2"/>
+            <line x1="616" y1="88" x2="608" y2="96" stroke="var(--sig-red)" stroke-width="2"/>
+            <text x="470" y="238" text-anchor="middle" font-size="11" font-weight="700" fill="var(--sig-red)">绝不自动完成</text>
+          </svg>
+        </div>
+        <div class="legend">
+          <span class="sw"><span class="box" style="background:var(--accent-soft);border:1.5px solid var(--accent)"></span>完成 = 锁定态，只能人工点开</span>
+          <span class="sw">红色虚线 + × = 定时任务被结构性挡在完成之外，不是靠自觉</span>
+        </div>
+      </div>
+      <p class="note-line">这张图画的是「还没走到的站」里第 2/3、4、5、6 站会经过的活状态，以及贯穿全文档的两条铁律之一（另一条是「没数据就是灰」，见上图）。具体到「评审中」怎么变成「完成」的按钮交互，还没真走过，不在这里编界面细节。</p>
+
+      <div class="foot">健康灯四色与三条判断理由的完整口径见设计正本 <code>docs/v4-prototype/design.md</code> 第 5 章。</div>
+    </section>
+
+    <!-- ============ M1 代码分成哪几块 ============ -->
+    <section class="screen" id="m1" data-title="代码分成哪几块" data-sec-name="特性开发维护">
+      <div class="eyebrow">特性开发维护</div>
+      <h1 class="disp">代码分成哪几块</h1>
+      <p class="lede">这一部分给<strong>要给 buddy 开发新特性的人</strong>看：代码分成哪几块、命令怎么跑、提交前要过哪些检查、怎么证明自己做的东西是真的。产品行为怎么设计的看 <code>docs/v4-prototype/design.md</code>；仓库整体的工作纪律（写作纪律、核心纪律）看仓根 <code>CLAUDE.md</code>；领域词查仓根 <code>CONTEXT.md</code>。</p>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>V4 有三个 crate，对 V3 那六个 crate 零依赖。</strong>V3 那套（<code>bw-core</code> / <code>bw-engine</code> / <code>bw-store</code> / <code>bw-app</code> / <code>ui</code> / <code>app-desktop</code>）只保证继续编译，不为 V4 改它们。什么时候能删，判据在设计正本第 12 章。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">三个 crate 的关系</span></h2>
+      <div class="diagram">
+        <div class="cap">app-shell 依赖 bw-v4 与 v4-engine；standard/ 被 bw-v4 读入做规范铺底；对 V3 六个 crate 零依赖（cargo tree 读回为 0）</div>
+        <div class="scroll">
+          <svg viewBox="0 0 640 400" width="640" height="400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="app-shell 依赖 bw-v4 内核与 v4-engine 能力底座；standard 目录喂给 bw-v4 做规范铺底；V4 三个 crate 对 V3 六个 crate 零依赖">
+            <defs>
+              <marker id="cArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+            </defs>
+
+            <rect x="220" y="16" width="200" height="72" rx="12" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.8"/>
+            <text x="320" y="46" text-anchor="middle" font-size="14" font-weight="700" fill="var(--accent-ink)">app-shell</text>
+            <text x="320" y="63" text-anchor="middle" font-size="11" fill="var(--accent-ink)">V4 新壳 · 九屏</text>
+            <text x="320" y="78" text-anchor="middle" font-size="11" fill="var(--accent-ink)">二进制名 bw-v4-dev</text>
+
+            <line x1="260" y1="200" x2="290" y2="94" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#cArrow)"/>
+            <line x1="440" y1="200" x2="360" y2="94" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#cArrow)"/>
+
+            <rect x="60" y="200" width="220" height="86" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="170" y="228" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--fg)">bw-v4</text>
+            <text x="170" y="246" text-anchor="middle" font-size="11" fill="var(--muted-2)">V4 内核：四张表 + 仓文件解析</text>
+            <text x="170" y="261" text-anchor="middle" font-size="11" fill="var(--muted-2)">+ 现算推导 + 规范铺底</text>
+            <text x="170" y="276" text-anchor="middle" font-size="11" fill="var(--muted-2)">禁依赖界面框架</text>
+
+            <rect x="360" y="200" width="220" height="86" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="470" y="228" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--fg)">v4-engine</text>
+            <text x="470" y="246" text-anchor="middle" font-size="11" fill="var(--muted-2)">能力底座：交互式 claude 执行器</text>
+            <text x="470" y="261" text-anchor="middle" font-size="11" fill="var(--muted-2)">+ PTY 内嵌终端 + worktree + 远端</text>
+            <text x="470" y="276" text-anchor="middle" font-size="11" fill="var(--muted-2)">只认裸 uuid，不认业务语义</text>
+
+            <line x1="120" y1="330" x2="145" y2="288" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#cArrow)"/>
+            <rect x="16" y="334" width="200" height="54" rx="10" fill="var(--surface-2)" stroke="var(--border)" stroke-width="1.5"/>
+            <text x="116" y="356" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">standard/</text>
+            <text x="116" y="372" text-anchor="middle" font-size="11" fill="var(--muted-2)">规范正本 · 编译期打进二进制</text>
+
+            <path d="M300 244 C 400 244, 440 280, 470 330" fill="none" stroke="var(--sig-red)" stroke-width="1.8" stroke-dasharray="4 4"/>
+            <circle cx="474" cy="336" r="7" fill="none" stroke="var(--sig-red)" stroke-width="2"/>
+            <line x1="470" y1="332" x2="478" y2="340" stroke="var(--sig-red)" stroke-width="2"/>
+            <line x1="478" y1="332" x2="470" y2="340" stroke="var(--sig-red)" stroke-width="2"/>
+            <rect x="420" y="334" width="204" height="60" rx="10" fill="var(--surface-2)" stroke="var(--border)" stroke-width="1.4" opacity=".8"/>
+            <text x="522" y="352" text-anchor="middle" font-size="11" font-weight="700" fill="var(--muted-2)">V3 六个 crate</text>
+            <text x="522" y="366" text-anchor="middle" font-size="11" fill="var(--muted-2)">bw-core · bw-engine · bw-store</text>
+            <text x="522" y="380" text-anchor="middle" font-size="11" fill="var(--muted-2)">bw-app · ui · app-desktop</text>
+            <text x="410" y="316" text-anchor="middle" font-size="11" font-weight="700" fill="var(--sig-red)">零依赖</text>
+          </svg>
+        </div>
+      </div>
+
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>crate</th><th>是什么</th></tr></thead>
+          <tbody>
+            <tr><td class="k">bw-v4</td><td>V4 内核：四张表的本机库（项目 / 活 / 会话 / 元信息）+ 仓文件解析（<code>.bw/PROJECT.md</code>、<code>.bw/*.toml</code>、<code>.bw/plan/</code> 周文件、<code>.bw/releases.md</code>）+ 现算推导（健康灯、周列表、走势）+ 自己的一对命令/事件总线 + 规范铺底 + 三张运作活 + 项目群工厂。零 IO 之外的 UI 依赖，在「内核不依赖界面」的稽查名单里。</td></tr>
+            <tr><td class="k">v4-engine</td><td>V4 的能力底座（2026-08-21 从 bw-engine 拷过来接管，不是复用）：交互式 claude 执行器、伪终端内嵌终端、每张活一棵工作目录的供给、git 读数、GitHub / codehub 两个远端。只认裸 uuid，不认业务语义。</td></tr>
+            <tr><td class="k">app-shell</td><td>V4 新壳（Dioxus 0.7）：九屏（项目墙 / 接入 / 设置 三个顶层 + 总览 / 计划 / 会话 / 通知 / 配置 / 知识库 六个项目内入口）+ theme + bridge（独立线程跑内核）+ adapters/（一个外部能力一个目录，各带一份 README）。二进制名 <code>bw-v4-dev</code>。</td></tr>
+            <tr><td class="k">standard/</td><td>规范件正本（和 <code>crates/</code>、<code>docs/</code> 平级），编译期打进二进制。改它就是改产品行为，不是改文档。<code>skills/</code> 下是 buddy 自带的技能与运作剧本，一个平铺目录。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 class="sec"><span class="n">app-shell 的九屏</span>项目内六入口 + 三个顶层屏</h2>
+      <div class="diagram">
+        <div class="cap">三个顶层屏不依赖具体项目；六个入口都挂在某一个项目下面</div>
+        <div class="scroll">
+          <svg viewBox="0 0 640 260" width="640" height="260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="app-shell 九屏分成两组：项目墙、接入、设置三个顶层屏，以及总览、计划、会话、通知、配置、知识库六个项目内入口">
+            <defs>
+              <marker id="eArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+            </defs>
+            <rect x="230" y="10" width="180" height="46" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/>
+            <text x="320" y="38" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--accent-ink)">app-shell 九屏</text>
+
+            <line x1="280" y1="56" x2="180" y2="88" stroke="var(--muted-2)" stroke-width="1.6" marker-end="url(#eArrow)"/>
+            <line x1="360" y1="56" x2="460" y2="88" stroke="var(--muted-2)" stroke-width="1.6" marker-end="url(#eArrow)"/>
+
+            <text x="120" y="84" font-size="11" font-weight="700" fill="var(--muted-2)">三个顶层屏</text>
+            <rect x="20" y="94" width="90" height="42" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="65" y="119" text-anchor="middle" font-size="11" fill="var(--fg)">项目墙</text>
+            <rect x="120" y="94" width="90" height="42" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="165" y="119" text-anchor="middle" font-size="11" fill="var(--fg)">接入</text>
+            <rect x="20" y="146" width="90" height="42" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="65" y="171" text-anchor="middle" font-size="11" fill="var(--fg)">设置</text>
+
+            <text x="500" y="84" font-size="11" font-weight="700" fill="var(--muted-2)">项目内六入口</text>
+            <rect x="410" y="94" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="453" y="118" text-anchor="middle" font-size="11" fill="var(--fg)">总览</text>
+            <rect x="504" y="94" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="547" y="118" text-anchor="middle" font-size="11" fill="var(--fg)">计划</text>
+            <rect x="410" y="142" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="453" y="166" text-anchor="middle" font-size="11" fill="var(--fg)">会话</text>
+            <rect x="504" y="142" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="547" y="166" text-anchor="middle" font-size="11" fill="var(--fg)">通知</text>
+            <rect x="410" y="190" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="453" y="214" text-anchor="middle" font-size="11" fill="var(--fg)">配置</text>
+            <rect x="504" y="190" width="86" height="40" rx="8" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.4"/>
+            <text x="547" y="214" text-anchor="middle" font-size="11" fill="var(--fg)">知识库</text>
+          </svg>
+        </div>
+      </div>
+      <p class="note-line">这张图替代了原计划的「总览一屏版面示意」——总览屏内部具体分几块、怎么排版，两份指南来源文档目前都没写，不在这里替它编；这里能如实画的是 <code>app-shell</code> 已经明确划出的九屏结构。</p>
+
+      <h2 class="sec"><span class="n">为什么是拷贝不是复用</span></h2>
+      <p>V3 那一整个目录最终会被整体删掉，所以 V4 不能有任何一条依赖指向那边——包括「只依赖 V3 的能力层」这种看起来很轻的耦合，因为它自己还依赖 V3 内核，会顺着传递过来；而改 V3 的能力层又会动到还在跑的 V3。拷一份两边都不牵连。</p>
+    </section>
+
+    <!-- ============ M2 常用命令 · 门禁 ============ -->
+    <section class="screen" id="m2" data-title="常用命令 · 门禁" data-sec-name="特性开发维护">
+      <div class="eyebrow">特性开发维护</div>
+      <h1 class="disp">常用命令 · 门禁</h1>
+      <p class="lede">命令改了这里就得改；写不确定的东西不如不写。</p>
+
+      <h2 class="sec"><span class="n">常用命令</span></h2>
+      <pre class="code">cargo check -p bw-v4              <span class="c"># V4 内核日常编译检查（不编 Dioxus，最快）</span>
+cargo run -p app-shell            <span class="c"># 启动 V4 新壳（二进制名 bw-v4-dev）</span>
+./scripts/bundle-desktop.sh v4    <span class="c"># 打成 dist/BW-V4.app（macOS；Windows 包见 LEFTOVERS）</span>
+./scripts/point-bwdev-here.sh v4  <span class="c"># 把当前二进制拷进 ~/Applications/BWDev.app（computer-use 用的稳定壳）</span></pre>
+
+      <h2 class="sec"><span class="n">门禁</span>提交前这一组全过</h2>
+      <pre class="code">cargo fmt --all --check
+cargo clippy --workspace --exclude app-desktop -- -D warnings   # 本机连新壳一起查
+cargo check -p bw-core --target wasm32-unknown-unknown --no-default-features
+cargo check -p ui --target wasm32-unknown-unknown
+./scripts/guard-kernel-ui-free.sh          <span class="c"># 内核 crate 不许依赖界面框架</span>
+./scripts/guard-no-cross-screen-import.sh  <span class="c"># 一屏一模块：屏与屏之间不互相 import</span>
+./scripts/guard-file-lines.sh              <span class="c"># 单文件 1500 行硬上限、600 行软提醒</span>
+./scripts/guard-screen-hooks.sh            <span class="c"># 用 Dioxus hook 的函数必须是组件</span>
+cargo check -p app-desktop                 <span class="c"># 旧壳编译过</span>
+cargo check -p app-shell                   <span class="c"># 新壳编译过</span>
+cargo test --workspace --exclude app-desktop</pre>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>本机比 CI 多查两样，不是笔误</strong>两个壳都吃 Dioxus / wry 那棵树，在 Linux 上要系统 WebKit / GTK，而 CI 那台机器上没有对应的库，构建脚本在 clippy 看到任何代码之前就链接失败。所以 CI 把两个壳都排除掉，<strong>壳的 clippy 只在本机跑</strong>。三个结构守卫是纯文本检查、不编译，CI 里照跑——<strong>新壳的布局规矩每次 push 都拦</strong>。</div>
+      </div>
+
+      <h3 class="sub">那三条守卫各自在拦什么</h3>
+      <ul class="bullets">
+        <li><strong>屏与屏不互相引用</strong>——共享数据要经共用的 ViewModel 模块或者绕命令/事件一圈，不许一屏直接伸手进另一屏。</li>
+        <li><strong>文件行数</strong>——老 buddy 走不下去的原因之一是某个文件动辄一万多行，改一处散弹一片。新壳是重写不是迁移，<strong>没有「存量文件一时改不完」的过渡借口</strong>。</li>
+        <li><strong>hook 必须在组件里</strong>——这条是评审抓到真 bug 之后补的：普通函数在渲染宏里被直接调用时，它的 hook 落在<strong>调用方</strong>的槽位上按序号取；切一次屏，序号还在、类型换了，取的时候类型转换失败，<strong>整次渲染崩溃</strong>，用户看到的是一块空白面板，编译期一点征兆都没有。放进循环里更糟：hook 数量随列表长度变，行与行的输入框内容会串位。</li>
+      </ul>
+    </section>
+
+    <!-- ============ M3 深链 · headless 例子 ============ -->
+    <section class="screen" id="m3" data-title="深链 · headless 例子" data-sec-name="特性开发维护">
+      <div class="eyebrow">特性开发维护</div>
+      <h1 class="disp">环境变量与深链 · headless 例子</h1>
+      <p class="lede">深链 = 用环境变量直接启动到指定项目 / 指定屏，是 V4 最主要的验证手段之一。启动时标准错误上会打两行证据日志：<code>[BW_OPEN] …</code>（深链解析结果）与 <code>[BW_BOOT] …</code>（界面已渲染的证明）。</p>
+
+      <h2 class="sec"><span class="n">环境变量</span></h2>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>变量</th><th>干什么</th></tr></thead>
+          <tbody>
+            <tr><td class="k">BW_DB</td><td>覆盖库路径（默认 macOS <code>~/Library/Application Support/BuildersWorkbench/workbench-v4.db</code>，和 V3 的库文件同目录不同名）</td></tr>
+            <tr><td class="k">BW_WORKSPACES</td><td>覆盖工作区根目录</td></tr>
+            <tr><td class="k">BW_OPEN=&lt;项目 slug 或名字&gt;<br>+ BW_PANEL=overview|plan|session|notify|config|kb</td><td>打开项目内六入口</td></tr>
+            <tr><td class="k">BW_VIEW=onboard|settings</td><td>打开不依赖项目的顶层屏（项目墙是默认视图，不需要变量）</td></tr>
+            <tr><td class="k">BW_SEL=&lt;kind&gt;:&lt;uuid&gt;</td><td>定位到具体一张活</td></tr>
+            <tr><td class="k">BW_PTY_DEBUG=1</td><td>内嵌终端把初始化结果与键盘字节打进标准错误</td></tr>
+            <tr><td class="k">BW_KB_DUMP=1</td><td>把知识库三个页签的数字打进标准错误（每组几个文件、代码图头一名是谁多大、资产五个区块各几条）——<strong>截图对不了数，这个能</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note-line">假群每发一条通知也会打一行 <code>[BW_CHAT_SENT] …</code>。</p>
+      <div class="callout warn">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>遇到不认识的枚举值会如实打印「未知值」</strong>，不静默退回某个默认屏——静默 fallback 会让你以为深链生效了。</div>
+      </div>
+
+      <h2 class="sec"><span class="n">headless 例子</span>不开界面直接驱动内核</h2>
+      <p>每一个都是<strong>读回证据</strong>，不是演示脚本：它们跑完会把「凭什么这么说」的命令一起打出来，数字对不上就是代码错了。全部不碰 claude、不碰网关。</p>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>例子</th><th>验什么</th><th>跑法</th></tr></thead>
+          <tbody>
+            <tr><td class="k">real_demo_v4</td><td><strong>主环指挥器</strong>：接入 → 铺底 → 开始本周 → 代人确认建活 → 一张活开工 → 代人推评审中 → 代人点完成 → 发版本 → 导出证据 JSON。同库重跑幂等</td><td class="k">cargo run -p bw-v4 --example real_demo_v4 -- &lt;db&gt; &lt;workspaces-root&gt; [--project &lt;slug&gt;]</td></tr>
+            <tr><td class="k">onboard_smoke</td><td>「完成接入」那一下真做了什么：目录不在 / 已经是 git 仓 / 有东西但不是 git 仓（要弹回，且库里不许留半个项目）…… 五档</td><td class="k">cargo run -p bw-v4 --example onboard_smoke -- &lt;工作目录&gt; [owner/repo]</td></tr>
+            <tr><td class="k">prompt_smoke</td><td>「开工时给 agent 的是索引不是正文」：技能摊在 buddy 自己目录、提示词里那条路径真是个文件、提示词里找不到技能正文、规范索引只列仓里真有的件</td><td class="k">cargo run -p bw-v4 --example prompt_smoke -- &lt;工作目录&gt;</td></tr>
+            <tr><td class="k">submit_smoke</td><td>「提交并开 MR」那一下：真提交、真推分支、开 MR 没成时<strong>不假装进了评审</strong></td><td class="k">cargo run -p bw-v4 --example submit_smoke -- &lt;工作目录&gt;</td></tr>
+            <tr><td class="k">merge_smoke</td><td>「合入并完成」那一下：合完主检出真被拉到最新、本机分支被收掉、合不成就整条不算数</td><td class="k">cargo run -p bw-v4 --example merge_smoke -- &lt;工作目录&gt;</td></tr>
+            <tr><td class="k">trend_smoke</td><td>近 N 周走势<strong>一个数都没存过</strong>，每次现问 git（和远端）算出来，过去任意一周随时能重算</td><td class="k">cargo run -p bw-v4 --example trend_smoke -- &lt;仓路径&gt; [owner/repo] [周数]</td></tr>
+            <tr><td class="k">settings_smoke</td><td>工作区根目录改完存进本机库、立刻对新项目生效、<strong>不动已接入的项目</strong></td><td class="k">cargo run -p bw-v4 --example settings_smoke -- &lt;工作目录&gt;</td></tr>
+            <tr><td class="k">pty_smoke</td><td>内嵌终端的地基：起 <code>bash -c 'echo pty-ok'</code> 读回；<code>--teardown</code> 验丢输入端后进程组被连坐；<code>--abort</code> 验中止后子进程照样收尾（「中止」走的就是这条）</td><td class="k">cargo run -p v4-engine --example pty_smoke [-- --teardown|--abort]</td></tr>
+            <tr><td class="k">adopted_probe</td><td>「这个仓被 buddy 接管过没有」的四种结局各打印一行（要 <code>gh auth login</code> 过，只读）</td><td class="k">cargo run -p v4-engine --example adopted_probe -- &lt;owner/repo&gt; [分支]</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ M4 怎么验证 ============ -->
+    <section class="screen" id="m4" data-title="怎么验证" data-sec-name="特性开发维护">
+      <div class="eyebrow">特性开发维护</div>
+      <h1 class="disp">怎么验证：三句话</h1>
+      <p class="lede"><strong>行为正确性靠端到端验证，不靠测试基线。</strong></p>
+      <div class="ops">
+        <div class="li"><div class="n">1</div><div class="t">任何「已完成 / 数字是 X」的说法，必须能用 <code>sqlite3</code> 从数据库、或者打开仓文件独立查出来核对——这叫<strong>读回</strong>。</div></div>
+        <div class="li"><div class="n">2</div><div class="t">深链启动后标准错误出现 <code>[BW_OPEN]</code>，就是「界面真的渲染了」的证明。</div></div>
+        <div class="li"><div class="n">3</div><div class="t">产品的不可违反约束（完成永远由人点、信号绝不手设）钉在类型和守卫里，编译过就守住了，配合 <code>/code-review</code> 与读回抽查。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">几条常用的读回</span></h2>
+      <pre class="code"><span class="c"># 库里恰好四张表，一张不多</span>
+sqlite3 &lt;db&gt; "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+
+<span class="c"># 本周业务活数与仓文件一致（缓存对文件）</span>
+sqlite3 &lt;db&gt; "SELECT COUNT(*) FROM issue WHERE project_id='&lt;pid&gt;' AND kind='business' AND week_of='2026-W34';"
+<span class="c">#   ↑ 应等于 &lt;ws&gt;/.bw/plan/2026-W34.md「业务活」表格的行数</span>
+
+<span class="c"># 自动建的活绝不被自动推进到完成</span>
+sqlite3 &lt;db&gt; "SELECT COUNT(*) FROM issue WHERE kind='ops' AND settled_at IS NOT NULL;"   <span class="c"># 期望 0</span>
+
+<span class="c"># 项目群配置不在库里 —— 查不到就是预期</span>
+cat &lt;ws&gt;/.bw/project.toml     <span class="c"># 看 [chat] 段</span></pre>
+      <p class="note-line"><strong>「实际输出」要真实粘贴，不是转述</strong>——拿截图或者 agent 自报当读回，正是这条纪律要避免的反例。</p>
+
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>关于内联单元测试（如实表述）</strong>仓里现存约两千行内联测试，CI 的 <code>cargo test</code> 在跑，它们必须过。纪律是：<strong>不要求写、现存的随 CI 跑、改到就顺手维护、不建回归大坝</strong>——别把「补测试」当成交付物，也别删掉在跑的。</div>
+      </div>
+
+      <div class="ex">
+        <div class="eh">用 computer-use 摸桌面应用的已知坑</div>
+        <div class="ed"><code>~/Applications/BWDev.app</code> 是长期稳定的验证壳，跑一次 <code>./scripts/point-bwdev-here.sh v4</code> 就能接上，<strong>不要新建 app</strong>（同一次会话里现造的新身份认不出来）。<strong>截图真实可用，点击和键盘永久受阻</strong>——两种打包方式都测过，是界面框架这层更深的窗口限制，不是权限问题。所以验证手段是<strong>终端直接调用</strong> bundle 里的可执行文件、用环境变量深链把目标视图摆到位再截图，不要指望点击导航（<code>open -a</code> 传不进环境变量）。</div>
+      </div>
+    </section>
+
+    <!-- ============ M5 改代码 · 文档去哪 ============ -->
+    <section class="screen" id="m5" data-title="改代码 · 文档去哪" data-sec-name="特性开发维护">
+      <div class="eyebrow">特性开发维护</div>
+      <h1 class="disp">改代码的几条硬规矩</h1>
+      <div class="rules">
+        <div class="rule"><div class="n">01</div><div class="t">不为向后兼容留旧路径</div><div class="d">发现过时的实现路径，直接移除它，而不是加兼容层、回退逻辑或迁移流程去迁就它。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">一屏一模块、一个外部能力一个适配模块</div><div class="d">适配模块目录里必须有一份 README，固定三段：借自哪个项目哪个文件、借了什么、<strong>没借什么</strong>。</div></div>
+        <div class="rule"><div class="n">03</div><div class="t">存就是为了取</div><div class="d">每加一列、每建一张表，都要说得出哪个界面或命令会来取它；说不出就不建。</div></div>
+        <div class="rule"><div class="n">04</div><div class="t">失败如实显示，不假装</div><div class="d">没做的功能写「未建」、占位不放模拟数据；替身路径的产出必须自我标注；探不到的工具灰态加一句怎么装，不隐藏也不假装能点。</div></div>
+        <div class="rule"><div class="n">05</div><div class="t">schema 迁移</div><div class="d">开发期改了 schema 直接删库重建；从试点起恢复双守卫——每加一列必须同时改 schema 并加迁移守卫，否则存量库直接崩。</div></div>
+        <div class="rule"><div class="n">06</div><div class="t">文档与代码不符，整块重写</div><div class="d">不在旁边追加一段「原来是 X，现在是 Y」的补丁——两层叙述并存，读的人下次还得再判一次哪层作数。</div></div>
+      </div>
+
+      <h2 class="sec"><span class="n">文档写到哪</span></h2>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>你要写的</th><th>落在哪</th></tr></thead>
+          <tbody>
+            <tr><td>V4 的设计（某个模块怎么设计的、为什么）</td><td><code>docs/v4-prototype/design.md</code> —— <strong>唯一</strong>设计事实源，一站走完就把那一章改成实况</td></tr>
+            <tr><td>还没干的活（含缓做的功能与结构债）</td><td><code>docs/LEFTOVERS.md</code> —— <strong>唯一</strong>清单，不设第二个</td></tr>
+            <tr><td>怎么用 / 怎么开发</td><td>就是这份文档</td></tr>
+            <tr><td>怎么讲给同事听</td><td><a href="v4-对外宣讲.html">v4-对外宣讲.html</a></td></tr>
+            <tr><td>出包与版本号</td><td><code>docs/releases.md</code></td></tr>
+            <tr><td>新开一批代号</td><td>先去 <code>docs/code-schemes.md</code> 登记，别撞车</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note-line"><strong>文档整理不跟开发混在一次会话里做</strong>：一站还没定型时去扫文档大概率白扫。等用户在真实环境里验证过这一站，另开一个会话专门做。</p>
+    </section>
+
+  </div>
+</main>
+
+<script>
+(function(){
+  var items = Array.prototype.slice.call(document.querySelectorAll('.nav-item'));
+  var screens = Array.prototype.slice.call(document.querySelectorAll('.screen'));
+  var crumbSec = document.getElementById('crumb-sec');
+  var crumbCur = document.getElementById('crumb-cur');
+  var badge = document.getElementById('top-badge');
+  var content = document.getElementById('content');
+  var KEY = 'buddy-v4-guide-screen';
+  window.go = show;
+
+  function show(id){
+    var el = document.getElementById(id); if(!el) return;
+    screens.forEach(function(s){ s.classList.remove('active'); });
+    el.classList.add('active');
+    items.forEach(function(n){ n.classList.toggle('active', n.dataset.screen === id); });
+    crumbSec.textContent = el.dataset.secName || '';
+    crumbCur.textContent = el.dataset.title || '';
+    var isMaint = id.charAt(0) === 'm';
+    badge.textContent = isMaint ? 'Maintenance' : 'Usage';
+    badge.className = 'badge ' + (isMaint ? 'maint' : 'use');
+    try{ localStorage.setItem(KEY, id); }catch(e){}
+    if(history.replaceState){ history.replaceState(null, '', '#' + id); }
+    else { location.hash = id; }
+    content.scrollTop = 0;
+  }
+  items.forEach(function(n){ n.addEventListener('click', function(){ show(n.dataset.screen); }); });
+  document.addEventListener('keydown', function(e){
+    if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var cur = document.querySelector('.screen.active'); if(!cur) return;
+    var idx = screens.indexOf(cur);
+    if(e.key === 'ArrowRight' && idx < screens.length - 1){ show(screens[idx+1].id); }
+    else if(e.key === 'ArrowLeft' && idx > 0){ show(screens[idx-1].id); }
+  });
+  var fromHash = (location.hash || '').replace(/^#/, '');
+  var saved = null; try{ saved = localStorage.getItem(KEY); }catch(e){}
+  if(fromHash && document.getElementById(fromHash)){ show(fromHash); }
+  else if(saved && document.getElementById(saved)){ show(saved); }
+  else { show('u0'); }
+})();
+</script>
+</body></html>

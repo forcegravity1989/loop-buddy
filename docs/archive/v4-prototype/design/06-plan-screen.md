@@ -1,5 +1,9 @@
 # 06 · 计划屏
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这篇管 V4 计划屏——一个界面里同时装下「这周要干什么」和「V3 那种六列看板」,以及拖拽的产品规则(六列全都能拖:排期直接生效,状态动作弹确认框,不合法的转移松手弹回)。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 字段名与命令名以 [02-data-and-files.md](02-data-and-files.md) 为准,本篇只应用、不另造一套。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么

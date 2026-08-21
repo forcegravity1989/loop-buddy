@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 buddy 讲给同事听</title>
+<style>
+  :root{
+    /* 配色取自 crates/app-shell/assets/hifi.css 的 :root（V4 高保真原型正本），非自造 */
+    --bg:#EFEBE2; --surface:#FBFAF6; --surface-2:#F4F0E7; --rail:#E9E3D7;
+    --fg:#23211C; --muted:#57534A; --muted-2:#8C867A; --muted-3:#A19B8D;
+    --border:#E2DCCF; --border-deep:#DBD4C5;
+    --accent:#C5654A; --accent-ink:#A8432B; --accent-soft:#EFD9CE;
+    --sig-green:#6B8E5A; --sig-amber:#D3A24A; --sig-red:#C0463A; --sig-gray:#9A9590;
+    --shadow:0 8px 26px rgba(35,33,28,.08);
+    --font-display:'Noto Serif SC','Songti SC','STSong','SimSun',serif;
+    --font-body:'Noto Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    --font-mono:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;display:flex;overflow:hidden}
+  ::selection{background:var(--accent-soft)}
+  ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-thumb{background:var(--border-deep);border-radius:6px}
+
+  aside.sidebar{width:264px;flex:0 0 264px;height:100vh;background:var(--rail);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:22px 0 16px;overflow-y:auto}
+  .brand{padding:0 22px 20px;border-bottom:1px solid var(--border)}
+  .brand .mark{font-family:var(--font-display);font-weight:700;font-size:22px;letter-spacing:-0.01em}
+  .brand .mark .dot{color:var(--accent)}
+  .brand .sub{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted-2);margin-top:6px}
+  nav{padding:14px 0;flex:1}
+  .nav-group-title{font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted-2);padding:8px 22px 6px;font-weight:500}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:8px 22px;cursor:pointer;font-size:14px;border-left:3px solid transparent;transition:background .12s,border-color .12s}
+  .nav-item:hover{background:rgba(197,101,74,.08)}
+  .nav-item.active{background:var(--accent-soft);border-left-color:var(--accent);color:var(--accent-ink);font-weight:500}
+  .nav-item .idx{font-family:var(--font-mono);font-size:11px;color:var(--muted-2);flex:0 0 16px}
+  .nav-item.active .idx{color:var(--accent-ink)}
+  .nav-foot{padding:12px 22px;border-top:1px solid var(--border);font-size:11px;color:var(--muted-2);line-height:1.6}
+  .nav-foot strong{color:var(--fg)}
+
+  main.main{flex:1;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  header.topbar{height:56px;flex:0 0 56px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;padding:0 32px;background:var(--bg)}
+  .crumb{display:flex;align-items:center;gap:10px;font-size:13px}
+  .crumb .sec{color:var(--muted-2)} .crumb .sep{color:var(--border-deep)} .crumb .cur{color:var(--fg);font-weight:500}
+  .badge{margin-left:auto;font-size:11px;letter-spacing:0.06em;padding:4px 10px;border-radius:999px;border:1px solid var(--accent-soft);color:var(--accent-ink);background:var(--surface);text-transform:uppercase}
+  .content{flex:1;overflow-y:auto;padding:34px 40px 90px}
+
+  .screen{display:none;max-width:900px}
+  .screen.active{display:block;animation:fade .18s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .eyebrow{font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent-ink);font-weight:500;margin-bottom:10px}
+  h1.disp{font-family:var(--font-display);font-weight:700;font-size:32px;line-height:1.2;letter-spacing:-0.02em;margin-bottom:14px}
+  .lede{font-size:16px;color:var(--muted);line-height:1.65;max-width:66ch;margin-bottom:22px}
+  h2.sec{font-family:var(--font-display);font-weight:600;font-size:20px;letter-spacing:-0.01em;margin:30px 0 12px;display:flex;align-items:center;gap:9px}
+  h2.sec .n{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--accent-ink);background:var(--accent-soft);padding:2px 7px;border-radius:5px}
+  h3.sub{font-size:16px;font-weight:600;margin:20px 0 8px}
+  p{margin-bottom:12px;max-width:68ch} .muted{color:var(--muted-2)}
+  strong{font-weight:600} code,.mono{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:.05em .35em;border-radius:4px}
+  a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid var(--accent-soft)} a:hover{border-bottom-color:var(--accent-ink)}
+
+  .bigquote{font-family:var(--font-display);font-size:22px;line-height:1.55;font-weight:600;color:var(--fg);border-left:4px solid var(--accent);padding:6px 0 6px 20px;margin:16px 0 20px;max-width:64ch}
+  .bigquote .small{display:block;font-family:var(--font-body);font-weight:400;font-size:14.5px;color:var(--muted);margin-top:8px}
+
+  .callout{display:flex;gap:12px;border-radius:10px;padding:14px 16px;margin:16px 0;border:1px solid var(--border)}
+  .callout svg{width:18px;height:18px;flex:0 0 18px;stroke-width:1.6;fill:none;margin-top:2px}
+  .callout.warn{background:#FBF1E2;border-color:#EAD0A6} .callout.warn svg{stroke:var(--sig-amber)}
+  .callout.note{background:var(--surface)} .callout.note svg{stroke:var(--accent)}
+  .callout.danger{background:#F6E3DE;border-color:#E3B7AD} .callout.danger svg{stroke:var(--sig-red)}
+  .callout .body{font-size:14px} .callout .body strong{display:block;margin-bottom:2px}
+
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}
+  .rule{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:13px 16px;background:var(--surface)}
+  .rule .n{font-family:var(--font-mono);font-size:11px;color:var(--accent-ink);margin-bottom:4px}
+  .rule .t{font-weight:600;margin-bottom:3px} .rule .d{font-size:13px;color:var(--muted);line-height:1.55}
+
+  .diagram{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:18px 16px;margin:14px 0 10px}
+  .diagram .cap{font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted-2);margin-bottom:12px}
+  .diagram .scroll{overflow-x:auto}
+  .diagram svg{display:block;min-width:460px}
+  .diagram .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted-2)}
+  .diagram .legend .sw{display:inline-flex;align-items:center;gap:6px;margin-right:4px}
+  .diagram .legend .box{width:14px;height:10px;border-radius:2px;display:inline-block}
+
+  .ktable-wrap{overflow-x:auto;margin:10px 0 6px}
+  .ktable{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);min-width:480px}
+  .ktable th,.ktable td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top;line-height:1.5}
+  .ktable th{background:var(--surface-2);font-weight:600;font-size:12px;color:var(--muted-2);letter-spacing:0.02em}
+
+  .stepwrap{display:flex;flex-direction:column;gap:0;margin:8px 0}
+  .step{display:grid;grid-template-columns:96px 1fr;gap:16px;padding:16px 0;border-bottom:1px dashed var(--border)}
+  .step:last-child{border-bottom:none}
+  .step .lbl{font-family:var(--font-mono);font-size:12px;color:#fff;background:var(--accent);border-radius:8px;padding:6px 8px;text-align:center;align-self:start;height:fit-content}
+  .step.prep .lbl{background:var(--muted-3)}
+  .step .t{font-weight:700;font-size:15.5px;margin-bottom:5px}
+  .step .d{font-size:14px;color:var(--muted);line-height:1.65}
+
+  .visioncards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:14px 0}
+  @media(max-width:820px){.visioncards{grid-template-columns:1fr}}
+  .vcard{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:16px 16px 14px;display:flex;flex-direction:column;gap:8px}
+  .vcard .vt{font-family:var(--font-display);font-weight:700;font-size:15px}
+  .vcard .vd{font-size:13px;color:var(--muted);line-height:1.6}
+  .vcard .vd strong{color:var(--fg)}
+  .vcard .status{margin-top:auto;padding-top:10px;border-top:1px dashed var(--border);font-size:12px;color:var(--accent-ink);font-weight:600}
+  .vcard .status .bar{height:6px;border-radius:3px;background:var(--surface-2);margin:6px 0 6px;overflow:hidden}
+  .vcard .status .bar i{display:block;height:100%;background:var(--accent)}
+
+  .qa{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:14px 16px;margin:12px 0}
+  .qa .q{font-weight:700;font-size:14.5px;margin-bottom:6px;color:var(--accent-ink)}
+  .qa .a{font-size:14px;color:var(--fg);line-height:1.65}
+
+  .closing{display:flex;flex-direction:column;gap:14px;margin:18px 0}
+  .closing .cq{background:var(--surface);border:1px solid var(--accent-soft);border-left:4px solid var(--accent);border-radius:0 12px 12px 0;padding:16px 20px;font-family:var(--font-display);font-weight:600;font-size:18px;line-height:1.6}
+  .closing .cq .tail{display:block;font-family:var(--font-body);font-weight:400;font-size:13.5px;color:var(--muted);margin-top:6px}
+
+  .foot{margin-top:36px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-2);max-width:76ch}
+  .foot code{color:var(--accent-ink)}
+  .banner{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:0 10px 10px 0;background:var(--surface);padding:14px 18px;margin-bottom:22px;font-size:13.5px;line-height:1.75;color:var(--muted)}
+  .banner strong{color:var(--fg)}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand"><div class="mark">buddy<span class="dot">.</span></div><div class="sub">把 buddy 讲给同事听</div></div>
+  <nav>
+    <div class="nav-group-title">讲稿</div>
+    <div class="nav-item active" data-screen="s0"><span class="idx">一</span>一句话是什么</div>
+    <div class="nav-item" data-screen="s1"><span class="idx">二</span>四个控制点</div>
+    <div class="nav-item" data-screen="s2"><span class="idx">三</span>换掉了什么</div>
+    <div class="nav-item" data-screen="s3"><span class="idx">四</span>三个愿景落到哪了</div>
+    <div class="nav-item" data-screen="s4"><span class="idx">五</span>一个项目怎么转</div>
+    <div class="nav-item" data-screen="s5"><span class="idx">六</span>常见问题</div>
+    <div class="nav-item" data-screen="s6"><span class="idx">七</span>记住这两句</div>
+  </nav>
+  <div class="nav-foot">
+    这份稿子<strong>不许吹</strong>：能跑的说能跑，在路上的说在路上，没做的直接说没做。
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="crumb"><span class="sec" id="crumb-sec">讲稿</span><span class="sep">/</span><span class="cur" id="crumb-cur">一句话是什么</span></div>
+    <span class="badge">给要介绍 buddy 的人</span>
+  </header>
+
+  <div class="content" id="content">
+
+    <!-- ============ S0 一句话是什么 ============ -->
+    <section class="screen active" id="s0" data-title="一句话是什么" data-sec-name="讲稿">
+      <div class="eyebrow">30 秒导读</div>
+      <h1 class="disp">把 buddy 讲给同事听</h1>
+      <div class="banner">
+        这是什么——一份<strong>讲稿</strong>，给要把 buddy 介绍给同事、领导或者别的团队的人用。里面没有一行代码、没有一个内部代号，照着讲就行。给谁看——任何一个要开口介绍 buddy 的人。现在还作数吗——作数（2026-08-21）。
+        <br><br>
+        <strong>一条纪律</strong>：这份稿子<strong>不许吹</strong>。已经能跑的说能跑，还在路上的就说在路上，没做的直接说没做。讲出去的每一句都会被人拿去用，吹出来的坑最后要自己填。文中所有「还在路上」的地方都标出来了，讲的时候别顺手抹掉。
+        <br><br>
+        想给人演示怎么操作，给他 buddy 的产品指南；想跟人讨论「为什么这么设计」，给他设计正本。
+      </div>
+
+      <h2 class="sec"><span class="n">一句话</span></h2>
+      <div class="bigquote">
+        buddy 是 AI Coding 时代里，一个人的一张工作台。
+        <span class="small">它让一个普通开发者，用 Builder 的方式，把一个三个月的小项目从想法一路管到能验收的结果。</span>
+      </div>
+      <p>如果只能说一句，就说这句。</p>
+      <p>如果对方追问「那到底解决什么问题」，再讲下面这段——<strong>这是产品最初的自我表述，一个字没改过</strong>：</p>
+      <div class="bigquote">
+        用 AI 时代的方式，一步步把一个项目的管理体系搭起来。
+        <span class="small">每一步都先讲「为什么」，再动手做。走完，你就拥有了一套可复制的项目管理方法，而不只是一块看板。</span>
+      </div>
+      <p>「不只是一块看板」这半句是重点。市面上的工具帮你<strong>存卡片</strong>，但不回答两个问题：现在该干什么、做到什么算完。buddy 想回答的就是这两个。</p>
+    </section>
+
+    <!-- ============ S1 四个控制点 ============ -->
+    <section class="screen" id="s1" data-title="四个控制点" data-sec-name="讲稿">
+      <div class="eyebrow">产品哲学 · 从第一天到现在没变过</div>
+      <h1 class="disp">四个控制点</h1>
+      <p class="lede">这四条是 buddy 全部设计的出发点。介绍产品时可以直接把这四条念出来，它们比任何功能清单都更能说清楚这个东西是什么。</p>
+
+      <div class="rules">
+        <div class="rule"><div class="n">01</div><div class="t">知道对标谁</div><div class="d">每个项目都要说清楚自己最像谁、差距在哪，否则不进入开发。</div></div>
+        <div class="rule"><div class="n">02</div><div class="t">每周在正常演进</div><div class="d">项目健康与否来自真实数据，不靠口头汇报，一眼可判断。</div></div>
+        <div class="rule"><div class="n">03</div><div class="t">让 agent 干活，人只守质量门</div><div class="d">人在验收处介入，不做微观管理；但验收信号必须足够可信。</div></div>
+        <div class="rule"><div class="n">04</div><div class="t">目标清晰且难造假</div><div class="d">一个项目只有一个北极星；支撑它的指标必须可控、可被真实统计。</div></div>
+      </div>
+
+      <div class="callout danger">
+        <svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div class="body"><strong>四条里最难的是第四条。</strong>大部分工具的仪表盘是自己骗自己：数字自己填、灯自己调。buddy 从一开始就把这条钉死——<strong>健康灯只能被真实数据点亮，没有数据就是灰色的「未知」，绝不假装绿</strong>。手填的数字会带一个「手填」标记，数据过期会自动降级。这条是产品的底线，不是可配置项。</div>
+      </div>
+    </section>
+
+    <!-- ============ S2 换掉了什么 ============ -->
+    <section class="screen" id="s2" data-title="换掉了什么" data-sec-name="讲稿">
+      <div class="eyebrow">和传统项目管理比</div>
+      <h1 class="disp">换掉的不是「谁写代码」</h1>
+      <p class="lede">先说清楚<strong>对比的对象是什么</strong>。现在人人都在用 AI 写代码，所以<strong>不存在「人写代码 vs agent 写代码」这种收益</strong>——这个不要讲，讲了会被人当外行。</p>
+      <p>真正的对比，是传统项目管理那一整套流程：大约十道工序、五个专职角色（产品经理、项目经理、技术负责人、设计师、测试），信息要靠这些角色之间反复开会、人工汇报才能流动。</p>
+
+      <div class="diagram">
+        <div class="cap">五个角色靠开会流转信息 → 一个人 + agent 循环端到端负责</div>
+        <div class="scroll">
+          <svg viewBox="0 0 700 260" width="700" height="260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="传统项目管理需要产品经理、项目经理、技术负责人、设计师、测试五个专职角色靠开会流转信息，换成一个 Builder 加上 agent 循环端到端负责">
+            <defs>
+              <marker id="tArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--accent-ink)"/>
+              </marker>
+            </defs>
+            <text x="130" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="var(--muted)">传统项目管理</text>
+            <rect x="30" y="40" width="200" height="30" rx="7" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.3"/>
+            <text x="130" y="60" text-anchor="middle" font-size="12" fill="var(--fg)">产品经理</text>
+            <rect x="30" y="76" width="200" height="30" rx="7" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.3"/>
+            <text x="130" y="96" text-anchor="middle" font-size="12" fill="var(--fg)">项目经理</text>
+            <rect x="30" y="112" width="200" height="30" rx="7" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.3"/>
+            <text x="130" y="132" text-anchor="middle" font-size="12" fill="var(--fg)">技术负责人</text>
+            <rect x="30" y="148" width="200" height="30" rx="7" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.3"/>
+            <text x="130" y="168" text-anchor="middle" font-size="12" fill="var(--fg)">设计师</text>
+            <rect x="30" y="184" width="200" height="30" rx="7" fill="var(--surface-2)" stroke="var(--border-deep)" stroke-width="1.3"/>
+            <text x="130" y="204" text-anchor="middle" font-size="12" fill="var(--fg)">测试</text>
+            <text x="130" y="232" text-anchor="middle" font-size="11.5" fill="var(--muted-2)">约十道工序 · 靠开会/人工汇报流动信息</text>
+
+            <line x1="248" y1="130" x2="368" y2="130" stroke="var(--accent-ink)" stroke-width="2.4" marker-end="url(#tArrow)"/>
+            <text x="308" y="118" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--accent-ink)">换成</text>
+
+            <text x="560" y="26" text-anchor="middle" font-size="13" font-weight="700" fill="var(--accent-ink)">AI 时代 · Builder 的做法</text>
+            <rect x="440" y="50" width="240" height="60" rx="12" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.8"/>
+            <text x="560" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--accent-ink)">1 个 Builder</text>
+            <text x="560" y="94" text-anchor="middle" font-size="11" fill="var(--accent-ink)">一人端到端负责</text>
+
+            <path d="M520 150 a40 22 0 1 1 80 0" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#tArrow)"/>
+            <rect x="440" y="150" width="240" height="60" rx="12" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="560" y="176" text-anchor="middle" font-size="13" font-weight="700" fill="var(--fg)">+ agent 循环</text>
+            <text x="560" y="194" text-anchor="middle" font-size="11" fill="var(--muted-2)">agent 产出，人审关键处</text>
+
+            <text x="560" y="232" text-anchor="middle" font-size="11.5" fill="var(--muted-2)">端到端负责 · 真实数据难造假</text>
+          </svg>
+        </div>
+      </div>
+
+      <h3 class="sub">逐条对照</h3>
+      <div class="ktable-wrap">
+        <table class="ktable">
+          <thead><tr><th>传统项目管理</th><th>AI 时代 · Builder 的做法</th></tr></thead>
+          <tbody>
+            <tr><td>五个专职角色，靠开会流动信息</td><td><strong>一个 Builder + agent 循环</strong>，一个人端到端负责</td></tr>
+            <tr><td>十页需求文档 + 层层评审</td><td><strong>原型即规格</strong></td></tr>
+            <tr><td>排期、甘特图</td><td><strong>每周一个可验证的增量</strong>，视野不超过三个月</td></tr>
+            <tr><td>人工逐行开发</td><td><strong>agent 产出大部分，人审关键的那部分</strong></td></tr>
+            <tr><td>状态周会、口头汇报</td><td><strong>真实数据，难造假</strong></td></tr>
+            <tr><td>（这几样保留并强化）</td><td>竞品对标 · 北极星对齐 · 引领与滞后指标 · 原型 · 复盘</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note-line" style="font-size:13px;color:var(--muted-2)"><strong>一句话总结这张表</strong>：换掉的不是「谁写代码」，是<strong>信息怎么流动、质量怎么把关</strong>。</p>
+    </section>
+
+    <!-- ============ S3 三个愿景落到哪了 ============ -->
+    <section class="screen" id="s3" data-title="三个愿景落到哪了" data-sec-name="讲稿">
+      <div class="eyebrow">介绍功能的骨架</div>
+      <h1 class="disp">三个愿景，和它们今天各自落到了哪</h1>
+      <p class="lede">这一节是介绍功能时最好的骨架——<strong>不要按屏幕讲，按愿景讲</strong>，对方才记得住。</p>
+
+      <div class="visioncards">
+        <div class="vcard">
+          <div class="vt">愿景一 · 所有项目长一样</div>
+          <div class="vd"><strong>痛点</strong>：每个项目一套做法，产出没人管，资产散在聊天记录、本机目录、各人脑子里。</div>
+          <div class="vd"><strong>怎么做</strong>：接入项目时往仓里放同一套东西——名片、指标正本、活的约定、周计划位置、发版记录位置。之后所有产出都写回这个仓。</div>
+          <div class="status">已经真走通<div class="bar"><i style="width:70%"></i></div>接入 + 铺底已跑通；给项目写开发手册还在路上（要先问你）</div>
+        </div>
+        <div class="vcard">
+          <div class="vt">愿景二 · 从「开发」到「小项目的 Builder」</div>
+          <div class="vd"><strong>痛点</strong>：一两个人的项目和实验局没有角色把控，做完了但走偏了，没人知道。</div>
+          <div class="vd"><strong>怎么做</strong>：一个每周转一圈的固定剧本。指标从真实数据推导、周目标挂着具体的活、完成永远人点、健康灯不假绿。</div>
+          <div class="status">设计+代码都建完<div class="bar"><i style="width:45%"></i></div>真实两周循环还没跑完，试点在跑，一边跑一边改</div>
+        </div>
+        <div class="vcard">
+          <div class="vt">愿景三 · 一张工作台打通所有系统</div>
+          <div class="vd"><strong>痛点</strong>：在代码平台、终端、设计器、聊天工具、问题单系统之间跳来跳去。</div>
+          <div class="vd"><strong>怎么做</strong>：每张活按类别选一个开工工具，都不用离开工作台；终端嵌在界面里，全程可见、可插话、可喊停。</div>
+          <div class="status">部分能跑<div class="bar"><i style="width:35%"></i></div>内嵌终端 + Claude 命令行能跑；真聊天工具、Cursor、内嵌设计器还没接</div>
+        </div>
+      </div>
+
+      <h3 class="sub">愿景一 · 详细</h3>
+      <p><strong>用户能感到什么</strong>：换项目不用换脑子；agent 打开仓就懂这个项目；别人把同一个仓纳入自己的 buddy，看到的是同一张总览。</p>
+      <p><strong>今天到哪了</strong>：接入 + 铺底这条路<strong>已经真走通了</strong>，而且有一条硬规矩——<strong>buddy 往你仓里写的东西全部收在一个专门的目录下，仓根一个字不动</strong>。你原本的说明文档、原本的 agent 约定，buddy 根本不碰。</p>
+      <p><strong>还在路上的</strong>：「给这个项目写一份开发手册」——buddy 起一次会话真读一遍你的仓，把读出来的摊给你看，<strong>问你要不要</strong>，你点头才写。这一步还没实现。为什么要先问：给别人的项目加规范，性质上是「建议改造你的项目」，得先读懂、先问过。</p>
+
+      <h3 class="sub">愿景二 · 详细</h3>
+      <p><strong>用户能感到什么</strong>：每周有一个可验证的增量，不靠会议和口头汇报。</p>
+      <p><strong>今天到哪了</strong>：剧本本身设计完了、代码也建出来了；<strong>但真实的两周循环还没跑完</strong>——试点在跑，一边跑一边改。这一条讲的时候要说清楚：<strong>这是我们自己正在用的东西，不是已经打磨了半年的成品。</strong></p>
+
+      <h3 class="sub">愿景三 · 详细</h3>
+      <p><strong>用户能感到什么</strong>：少切窗；工具是缝进来的，不是自己造的。</p>
+      <p><strong>今天到哪了</strong>：内嵌终端 + Claude 命令行这条<strong>已经能跑</strong>；项目群的接口定了、假群能跑通，<strong>真实的内部聊天工具还没接</strong>（实现由同事补）；Cursor 和内嵌设计器<strong>还没接</strong>。</p>
+      <div class="callout note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <div class="body"><strong>这里有一条我们自己的纪律，值得讲出来</strong>：<strong>能力底座一律用业界成熟的东西，buddy 只写薄薄一层适配。</strong>自建要举证。已经包装好的东西，永远不改写成自己的原生实现。</div>
+      </div>
+    </section>
+
+    <!-- ============ S4 一个项目怎么转 ============ -->
+    <section class="screen" id="s4" data-title="一个项目怎么转" data-sec-name="讲稿">
+      <div class="eyebrow">演示时的主线</div>
+      <h1 class="disp">一个项目在 buddy 上是怎么转的</h1>
+      <p class="lede">这是演示时的主线。<strong>一次准备，然后每周六步。</strong></p>
+
+      <div class="diagram">
+        <div class="cap">准备只做一次；一 → 二 → 三 → 四 → 五 → 六，六之后回到一</div>
+        <div class="scroll">
+          <svg viewBox="0 0 500 460" width="500" height="460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="准备接入项目做一次之后，六步循环：一看总览，二开始本周，三干活，四验收，五记发版，六定时盘点，六之后回到一">
+            <defs>
+              <marker id="wArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--muted-2)"/>
+              </marker>
+              <marker id="wArrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0L10 5L0 10z" fill="var(--accent-ink)"/>
+              </marker>
+            </defs>
+            <!-- 六边环 -->
+            <line x1="304" y1="111" x2="330" y2="127" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#wArrow)"/>
+            <line x1="384" y1="220" x2="384" y2="251" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#wArrow)"/>
+            <line x1="330" y1="344" x2="304" y2="359" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#wArrow)"/>
+            <line x1="196" y1="359" x2="170" y2="344" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#wArrow)"/>
+            <line x1="116" y1="251" x2="116" y2="220" stroke="var(--muted-2)" stroke-width="2" marker-end="url(#wArrow)"/>
+            <!-- 闭环边 六→一 -->
+            <line x1="170" y1="127" x2="196" y2="111" stroke="var(--accent-ink)" stroke-width="2.4" marker-end="url(#wArrowAccent)"/>
+            <text x="250" y="122" text-anchor="middle" font-size="11" font-weight="700" fill="var(--accent-ink)">↺ 下周回到「一」</text>
+            <!-- 准备→一 -->
+            <line x1="117" y1="59" x2="174" y2="68" stroke="var(--accent-ink)" stroke-width="2" marker-end="url(#wArrowAccent)"/>
+
+            <rect x="5" y="24" width="110" height="52" rx="10" fill="var(--muted-3)" stroke="var(--muted-2)" stroke-width="1.2"/>
+            <text x="60" y="47" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">准备 · 接入</text>
+            <text x="60" y="63" text-anchor="middle" font-size="11" fill="#fff" opacity=".9">一次性</text>
+
+            <rect x="195" y="53" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="250" y="76" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">一 · 看总览</text>
+            <text x="250" y="92" text-anchor="middle" font-size="11" fill="var(--muted-2)">健康灯多半先灰</text>
+
+            <rect x="329" y="131" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="384" y="154" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">二 · 开始本周</text>
+            <text x="384" y="170" text-anchor="middle" font-size="11" fill="var(--muted-2)">复盘+定目标</text>
+
+            <rect x="329" y="286" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="384" y="309" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">三 · 干活</text>
+            <text x="384" y="325" text-anchor="middle" font-size="11" fill="var(--muted-2)">在活的目录里</text>
+
+            <rect x="195" y="364" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="250" y="387" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">四 · 验收</text>
+            <text x="250" y="403" text-anchor="middle" font-size="11" fill="var(--muted-2)">你点完成</text>
+
+            <rect x="61" y="286" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="116" y="309" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">五 · 记发版</text>
+            <text x="116" y="325" text-anchor="middle" font-size="11" fill="var(--muted-2)">归到版本号</text>
+
+            <rect x="61" y="131" width="110" height="54" rx="10" fill="var(--surface)" stroke="var(--border-deep)" stroke-width="1.6"/>
+            <text x="116" y="154" text-anchor="middle" font-size="12" font-weight="700" fill="var(--fg)">六 · 定时盘点</text>
+            <text x="116" y="170" text-anchor="middle" font-size="11" fill="var(--muted-2)">自动建活，停评审中</text>
+
+            <text x="250" y="445" text-anchor="middle" font-size="11.5" fill="var(--muted-2)">剧本设计完、代码也建出来了；真实两周循环还没跑完，试点在跑</text>
+          </svg>
+        </div>
+      </div>
+
+      <div class="stepwrap">
+        <div class="step prep"><div class="lbl">准备<br>一次性</div><div><div class="t">把项目接进来</div><div class="d">填两张卡：这个项目在哪（从你账号下的仓里选，或者直接打地址）、这个项目是什么（名称、你想做什么、最像的对标、三个月后怎样算成了）。最后一格就是<strong>北极星</strong>——它是唯一必填的目标，而且必须可度量。点完成之后，buddy 自动开一条分支、把管理体系的骨架写进你的仓、提一个合并请求，然后<strong>停下来等你合</strong>。它不会自动合，也不会自动把这件事标成完成。</div></div></div>
+        <div class="step"><div class="lbl">第一步</div><div><div class="t">周一看总览</div><div class="d">一屏看完这个项目是什么、健康不健康。健康灯只有四种颜色：绿（平稳）、黄（需要关注）、红（阻塞）、灰（没数据），旁边把判断理由三条全列出来——<strong>不是一个孤零零的圆点让你猜</strong>。第一次打开多半是灰的。<strong>这是对的，不是 bug。</strong></div></div></div>
+        <div class="step"><div class="lbl">第二步</div><div><div class="t">开始本周</div><div class="d">点一下「开始本周」，buddy 起一次 agent 会话，在同一次对话里做完三件事：复盘上周 → 把指标补齐、给绑不上数据的找一条最便宜的采集路径 → 和你一起把这周的目标和活清单聊出来。<strong>这里有个容易被误解的地方，讲的时候要点破</strong>：周目标不是你「写」出来的，也不是 agent 替你决定的——它是在这次对话里，结合指标、代码现状和上周记录<strong>聊出来的</strong>。<strong>你只在首尾出现：点一下开始，和最后确认一下。</strong></div></div></div>
+        <div class="step"><div class="lbl">第三步</div><div><div class="t">干活</div><div class="d">每张活按类别默认好了用什么工具，点开工，agent 就在这张活自己的工作目录里干起来。你在嵌进来的终端里全程看得见。<strong>agent 干完，最远只能把活推到「评审中」。</strong></div></div></div>
+        <div class="step"><div class="lbl">第四步</div><div><div class="t">验收</div><div class="d">看改动、看文档、看原型，合并，然后<strong>你亲手点「完成」</strong>。<strong>这一下永远是人点的。</strong>这不是配置项，是写死在类型系统里的：「完成」这个状态只有一个入口，就是「评审中」，而且必须来自一次显式的人工动作。</div></div></div>
+        <div class="step"><div class="lbl">第五步</div><div><div class="t">记一笔发版</div><div class="d">周末把这周完成的活归到一个版本号下，写进仓里的发版记录。</div></div></div>
+        <div class="step"><div class="lbl">第六步</div><div><div class="t">定时盘点</div><div class="d">每周固定时间，buddy 自己建一张「资产盘点」的活并自动开工：看看文档齐不齐、规范有没有过期、指标数据新不新鲜、有没有该拆的大文件。<strong>盘点只写建议，不动手改代码。</strong>报告停在「评审中」等你周一来看，你勾选哪几条建议，才真的建成活。<strong>这一条正好说明前面那条铁律</strong>：定时任务只会自动<strong>建</strong>活，<strong>绝不自动完成</strong>活。</div></div></div>
+      </div>
+    </section>
+
+    <!-- ============ S5 常见问题 ============ -->
+    <section class="screen" id="s5" data-title="常见问题" data-sec-name="讲稿">
+      <div class="eyebrow">有人一定会问</div>
+      <h1 class="disp">有人一定会问的几个问题</h1>
+
+      <div class="qa">
+        <div class="q">它是不是又一个看板？</div>
+        <div class="a">不是。看板只是其中一屏。真正的东西是那套每周转一圈的方法，以及「这个项目健康不健康」是被<strong>算出来</strong>的，不是被<strong>填出来</strong>的。</div>
+      </div>
+      <div class="qa">
+        <div class="q">数据在哪？会不会传到什么地方去？</div>
+        <div class="a">全在你自己机器上，一个本地数据库文件；项目相关的正本在你自己的代码仓里。<strong>AI 执行就是你本机的命令行工具</strong>，在嵌进来的终端里全程可见、可中止，花费你自己把握。<strong>不是云服务。</strong></div>
+      </div>
+      <div class="qa">
+        <div class="q">我们团队五个人，能用吗？</div>
+        <div class="a">buddy 里<strong>没有成员、没有权限、没有群聊、没有收件箱</strong>，它假设你就是那一个 Builder。但<strong>多人协作是允许的，靠代码仓发生</strong>：有合并权限的同事把同一个仓纳入自己的 buddy，就能在自己的待办里看到评审中的活，审完点合并。跨人的提醒走项目本来就有的聊天群。</div>
+      </div>
+      <div class="qa">
+        <div class="q">界面上的数字我怎么信？</div>
+        <div class="a">每一个都能自己查证——数据库可以直接查，仓里的文件可以直接打开看。<strong>工具说的话不用信，可以验。</strong>这是产品的设计前提，不是附加功能。</div>
+      </div>
+      <div class="qa">
+        <div class="q">已经跑了很久的老项目能接进来吗？</div>
+        <div class="a">能。接入时 buddy 会发现这是个有历史的仓，把它自己的历史（提交、合并、标签）按同样的格式补成周记录和发版记录，标明是回填的。<strong>回填只解释过去，不点亮健康灯</strong>——灯只看接入那天之后的真实数据。这条已经能跑一半：确定性的那半（直接从历史算出来的数字）做完了，需要 agent 读文档补充的那半<strong>还在路上</strong>。</div>
+      </div>
+      <div class="qa">
+        <div class="q">什么时候能用上？</div>
+        <div class="a">今天它是我们自己在用的东西，试点在跑。<strong>macOS 能装，Windows 的安装包还没出。</strong>说这句的时候不要含糊——含糊会让人以为下周就能拿到。</div>
+      </div>
+    </section>
+
+    <!-- ============ S6 记住这两句 ============ -->
+    <section class="screen" id="s6" data-title="记住这两句" data-sec-name="讲稿">
+      <div class="eyebrow">讲完之后，别忘了这两句</div>
+      <h1 class="disp">如果整场只有两句话能被记住</h1>
+      <p class="lede">应该是这两句：</p>
+      <div class="closing">
+        <div class="cq">「完成」永远由人点。<span class="tail">agent 干完最远到「评审中」；定时任务只会自动建活，绝不自动完成活。</span></div>
+        <div class="cq">没数据就是灰，不是绿。<span class="tail">健康只能从真实数据推出来，界面上任何一个数字都能自己查证。</span></div>
+      </div>
+      <p>这两句说完，对方大概就懂这个产品是什么脾气了。</p>
+    </section>
+
+  </div>
+</main>
+
+<script>
+(function(){
+  var items = Array.prototype.slice.call(document.querySelectorAll('.nav-item'));
+  var screens = Array.prototype.slice.call(document.querySelectorAll('.screen'));
+  var crumbSec = document.getElementById('crumb-sec');
+  var crumbCur = document.getElementById('crumb-cur');
+  var content = document.getElementById('content');
+  var KEY = 'buddy-v4-pitch-screen';
+  window.go = show;
+
+  function show(id){
+    var el = document.getElementById(id); if(!el) return;
+    screens.forEach(function(s){ s.classList.remove('active'); });
+    el.classList.add('active');
+    items.forEach(function(n){ n.classList.toggle('active', n.dataset.screen === id); });
+    crumbSec.textContent = el.dataset.secName || '';
+    crumbCur.textContent = el.dataset.title || '';
+    try{ localStorage.setItem(KEY, id); }catch(e){}
+    if(history.replaceState){ history.replaceState(null, '', '#' + id); }
+    else { location.hash = id; }
+    content.scrollTop = 0;
+  }
+  items.forEach(function(n){ n.addEventListener('click', function(){ show(n.dataset.screen); }); });
+  document.addEventListener('keydown', function(e){
+    if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var cur = document.querySelector('.screen.active'); if(!cur) return;
+    var idx = screens.indexOf(cur);
+    if(e.key === 'ArrowRight' && idx < screens.length - 1){ show(screens[idx+1].id); }
+    else if(e.key === 'ArrowLeft' && idx > 0){ show(screens[idx-1].id); }
+  });
+  var fromHash = (location.hash || '').replace(/^#/, '');
+  var saved = null; try{ saved = localStorage.getItem(KEY); }catch(e){}
+  if(fromHash && document.getElementById(fromHash)){ show(fromHash); }
+  else if(saved && document.getElementById(saved)){ show(saved); }
+  else { show('s0'); }
+})();
+</script>
+</body></html>

@@ -1,5 +1,9 @@
 # V4 MVP 全貌:一周的剧本、屏幕、规范与建法
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这是 V4 的**母文档**——V4 想干什么、一个项目一周怎么转一圈、指标 / 周目标 / 活怎么串、界面分成哪几屏、一样信息该住在哪一层、什么叫做完。**给谁看**:要理解 V4 的人,以及要判断「某条决定为什么这么定」的人。**现在还作数吗**:作数——它是 V4 的设计事实源,详细设计 [design/](design/) 与它冲突时以本篇为准。代码已经照这份文档建出来并合进 `main`(V4 内核 `crates/bw-v4` + 新壳 `crates/app-shell`),**试点还没跑**;还没做完的部分只认 [`../LEFTOVERS.md`](../LEFTOVERS.md)。
 >
 > 本文成文于 2026-08-18,之后经内部专家评审与用户多轮回复反复收口,过程记录已归档在 [`../archive/v4-prototype/`](../archive/v4-prototype/),正文只留结论。看不懂的词查 [`../../CONTEXT.md`](../../CONTEXT.md);代号查 [`../code-schemes.md`](../code-schemes.md)。

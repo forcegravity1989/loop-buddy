@@ -1,5 +1,9 @@
 # 02 · 数据与文件:库里剩什么表、仓里的文件长什么样、信息住哪一层
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这篇管三件事——SQLite 库里到底有哪几张表(列级定义)、项目代码仓里有哪些 buddy 要读要写的文件(每个给完整样例)、以及一样东西该住在「仓 / 本机文件 / 现算」三层里的哪一层。**一句话结论:仓是正本,库只有四张表(`project` / `issue` / `claude_conversation` / `app_meta`),别的数字全部现算。** 给接着做 V4 的会话看,也给要往项目仓里加文件的人看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 与母文档([`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md) §6「信息住哪」)冲突时以母文档为准。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么

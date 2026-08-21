@@ -18,6 +18,6 @@
 | `superpowers/` | `docs/superpowers/plans/*` 与已被取代的 `specs/` | superpowers 技能产出的实施计划原件;结论已并入 `plan/13`/`15`/`16`/`20` 或 `docs/v1-prototype/`。仍作数的 spec 留在 `docs/superpowers/specs/` |
 | `design/` | 仓库根 `design/` | Rust 重写前的 HTML 交互原型稿(`.dc.html` + `support.js`)与设计评审截图,2026-07-15 冻结。用浏览器打开子目录里的 `.dc.html` 仍可渲染 |
 | `verification/` | 仓库根 `verification/` + `docs/*.png` | 2026-07 中旬「完整形态」与「WorkflowHub 25 轮自举」两批的演示报告、动图(约 14MB)与截图 |
-| `v4-prototype/` | `docs/v4-prototype/` 的规划期件 | V4 设计期的一次性材料:用户口述原文、二次握手问答、交叉复核记录、内部专家评审一页纸,以及结论已进设计与代码的五篇源码级预研。现状以 `docs/v4-prototype/`(现役五篇 + design/)与 `crates/bw-v4`、`crates/app-shell` 的源码为准 |
+| `v4-prototype/` | `docs/v4-prototype/` 的规划期件与蒸馏前的原文 | 两批。**规划期一次性材料**:用户口述原文、二次握手问答、交叉复核记录、内部专家评审一页纸,以及七篇源码级预研(`research/`)。**2026-08-21 文档收敛时归档的原文**:母文档 `mvp-blueprint-draft.md`(含「待拍-01~32」决策台账)、`standard-module-draft.md`、`design/01–14` 与 `design/README.md` —— 它们被蒸馏成一篇 `docs/v4-prototype/design.md`,正文一字未改、只在标题下加了历史横幅。**现状一律以 [`../v4-prototype/design.md`](../v4-prototype/design.md) 与 `crates/bw-v4`、`crates/v4-engine`、`crates/app-shell` 的源码为准** |
 | `v1-prototype/` `v2-prototype/` `v3-prototype/` | 同名现役目录(`docs/v1~v3-prototype/`) | 2026-08-20 归档:V1/V2/V3 三代迭代线里已落地、且没有被任何现役文档引用为"当前权威"的设计事实源(共 8 篇,如 `issue1-onboard-simplify.md`、`piercing-fixes-1.md`、`roadmap.md`、`onboard-list-and-claude-resolve.md` 等)。仍被现役文档引用为当前权威、或含未关闭欠账线索的篇章原地留在同名现役目录,没有整批搬空——按篇判断,不按目录判断。现状以对应现役目录的 README 为准 |
 | `scripts/` | `scripts/make_demo_video.py` | 生成上面那批演示动图的脚本;产物已归档,脚本随之归档 |

@@ -1,5 +1,9 @@
 # 04 · 开工工具与 workflow 怎么接
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这篇回答两件事——**开工工具怎么注册与分发**(终端类如 Claude CLI / Cursor,与本机网页内嵌类如 Open Design,怎么声明、探活、起、停),**workflow(SOP 类技能包)与单技能怎么识别、铺进项目仓、物化到活的 worktree、注入给开工工具**。「用了几次」一律现算(扫 `.claude/skills/` + 数活的 `workflow` 属性),不建任何战绩表。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 会话屏三栏怎么摆是 [05 篇](05-session-screen.md)的事,三张运作 workflow 的正文是 [09 篇](09-ops-workflows.md)的事。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ---
