@@ -1,5 +1,9 @@
 # 穿刺笔记：stablyai/orca 源码研究(2026-08-18)
 
+> **历史档案(2026-08-21 归档,只加不改)**:这是设计期的**源码级预研笔记**,结论已经并进 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md),**现状以那一篇与源码为准**。正文一字未改,只加了这行横幅——它记录的是当时看到的事实(部分适配模块的 README 仍引它当接法依据),不描述现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这是对开源项目 `stablyai/orca`("多路并行 agent 的 IDE")的**源码级**穿刺笔记,看它的终端内嵌、会话生命周期、右侧栏是怎么做的。**为什么还留着**:V4 的会话屏和两个适配模块(`crates/app-shell/src/adapters/terminal_xterm/`、`claude_cli/`)的 README 直接引它当接法依据,删了源码注释就断链。**怎么读**:结论「借模式,不整体嵌」已经采纳并落进代码,这里是当时看到的事实;要看今天怎么实现的,读 [`../design/05-session-screen.md`](../design/05-session-screen.md) 与那两个适配模块的源码。
 
 ---

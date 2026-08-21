@@ -1,5 +1,9 @@
 # V4 MVP 详细设计:目录与读法
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这个目录把母文档 [`../mvp-blueprint-draft.md`](../mvp-blueprint-draft.md)(V4 的全貌与决策台账)里的每一站、每一屏、每一条规矩,落到「模块怎么分、数据怎么存、文件长什么样、命令叫什么、失败怎么显示、怎么读回核对」的粒度。给两种人看:**接着做 V4 的会话**(照着改代码)、**同事**(接 WeLink 群适配、往 `standard/` 贡献件)。**现在还作数吗**:作数,而且**代码已经照着建出来了**——`crates/bw-v4`(V4 内核)与 `crates/app-shell`(V4 新壳)都在 `main` 上,各篇第 3 节「工程对照」写的是真代码。**还没做完的部分不在这里找,只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组**。看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 正文里偶尔提到的「握手清单」「交叉复核」是设计期两份已归档的问答与复核记录,在 [`../../archive/v4-prototype/`](../../archive/v4-prototype/) 下;决策本身的正本是母文档 §11 的「待拍-NN」台账。

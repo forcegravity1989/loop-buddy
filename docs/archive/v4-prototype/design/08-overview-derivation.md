@@ -1,5 +1,9 @@
 # 08 · 总览推导
 
+> **历史档案(2026-08-21 归档,只加不改)**:这篇已被 [`docs/v4-prototype/design.md`](../../../v4-prototype/design.md) 蒸馏取代,**现状以 `docs/v4-prototype/design.md` 为准**。正文一字未改,只加了这行横幅——读它是为了考古「当时为什么这么定」,不要当现状;还没干的活只认 [`docs/LEFTOVERS.md`](../../../LEFTOVERS.md)。
+
+---
+
 > **30 秒导读**:这篇讲总览屏一列七块,每块的每个数字从哪来、怎么算、没数据时显示什么;健康大灯的判定算法;项目名片(含「项目群」一行)怎么编辑。**总览一个数都不存**——指标定义读 `.bw/metrics.toml`,业务指标的读数今天读 `.bw/plan/` 里的快照段(读数的新落点是 `.bw/metrics/readings.jsonl`,见 [14 篇](14-metrics-collection.md) §2.5,**还没落地**),发版记录读 `.bw/releases.md`,其余现场算;没数据就是灰,不假装绿。给接着做 V4 的会话看。**现在还作数吗**:作数,而且已经落地——V4 的内核 `crates/bw-v4` 与新壳 `crates/app-shell` 都在 `main` 上,第 3 节「工程对照」写的是真代码的结构。还没做完的部分只认 [`../../LEFTOVERS.md`](../../LEFTOVERS.md) 的 V4A–V4G 七组。 看不懂的词查 [`../../../CONTEXT.md`](../../../CONTEXT.md);代号查 [`../../code-schemes.md`](../../code-schemes.md)。
 
 ## 0 · 这篇管什么、不管什么
